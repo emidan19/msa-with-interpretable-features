@@ -30,9 +30,18 @@ feature_config:
   # Beat tracking: librosa | beat_this | madmom
   beat_tracking_method: beat_this
 
+  # SSL device
+  ssl_device: "cpu"
+
   # Computing features
   # Available options:
-  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections, fused
+  # - Classical audio features -
+  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, fused
+  # - SSL models -
+  #   muq, matpac, musicfm
+  # - Sections (labels) -  
+  #   sections
+
   computing_features:
     - stm
     - cens
