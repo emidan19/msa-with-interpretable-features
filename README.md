@@ -4,6 +4,13 @@ Prototype for extracting interpretable and SSL-based features for music
 structure analysis, then converting them into beat-synchronous descriptors and
 self-similarity matrices.
 
+## Copy repo
+
+```bash
+git clone https://github.com/emidan19/msa-with-interpretable-features.git
+cd msa-with-interpretable-features/
+```
+
 ## Environment
 
 The environment used in this workspace is:
@@ -28,7 +35,7 @@ conda activate msa_features
   ```python 
   python extract_msa_features.py
   ``` 
-  make sure to have the SSL models repos ([MusicFM](https://github.com/minzwon/musicfm), [MuQ](https://github.com/tencent-ailab/MuQ/), [MATPAC](https://github.com/aurianworld/matpac/), or any other you want) at ``bash MSA-with-Interpretable-Features/../../SSL_models``
+  make sure to have the SSL models repos ([MusicFM](https://github.com/minzwon/musicfm), [MuQ](https://github.com/tencent-ailab/MuQ/), [MATPAC](https://github.com/aurianworld/matpac/), or any other you want) at ``msa-with-interpretable-features/../../SSL_models``
 - `pipeline.py`: orchestrates extraction, beat-synchronous aggregation, preview rendering, and output writing.
 
 ## Config File
