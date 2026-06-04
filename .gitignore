@@ -37,6 +37,7 @@ MANIFEST
 
 # Features and results
 feature_outputs/
+experiments/
 
 # Installer logs
 pip-log.txt

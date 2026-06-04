@@ -19,6 +19,50 @@ limit: 100
 # Shared output directory:
 out_dir: feature_outputs/example_run
 
+# Structure baseline mode:
+#   python run_structure_baseline.py --config msa_feature_config.template.yaml
+#
+# If `feature_dir` is omitted or null, features are extracted online from
+# `audio_dir` into `out_dir` before segmentation. If it is set, the runner
+# reads *_features.npz files from that folder.
+segmentation:
+  feature_dir: feature_outputs/example_run
+  experiment_dir: experiments/structure_baseline/example_run
+
+  # One SSM feature is passed directly to every segmentation algorithm.
+  # If more than one is listed, GraphDitty similarity network fusion is used
+  # and the fused SSM is passed to every algorithm.
+  ssm_features:
+    - mfcc
+    - cens
+    - stm
+
+  graphditty_fusion:
+    k: 5
+    niters: 20
+    reg_diag: 1.0
+    reg_neighbs: 0.5
+    verbose: false
+
+  # Supported SSM-based algorithms:
+  # - cbm / as_seg_cbm: as-seg CBM, default source for CBM
+  # - msaf_cbm: MSAF vendored CBM implementation
+  # - foote / msaf_foote: MSAF Foote novelty over the selected SSM
+  algorithms:
+    - id: cbm
+      source: as_seg
+      params:
+        min_size: 1
+        max_size: 32
+        penalty_weight: 1.0
+        penalty_func: modulo8
+        bands_number:
+    - id: foote
+      source: msaf
+      params:
+        M_gaussian: 66
+        L_peaks: 64
+
 feature_config:
   # Optional section annotation directory containing *.CHORUS.TXT files
   sections_dir: /home/emartinez/data/public/RWC-Music-Database/Popular-Music/CHORUS
