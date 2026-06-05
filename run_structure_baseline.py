@@ -5,13 +5,10 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import json
 import os
-import sys
 import time
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Iterable
 
 _CACHE_ROOT = os.path.join(os.getcwd(), ".cache")
@@ -23,25 +20,12 @@ for _cache_dir in (os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"]):
 import numpy as np
 import yaml
 
+from segmentation import normalize_algorithms, resolve_segmentation_ssm, run_algorithm
+
 
 REPO_ROOT = Path(__file__).resolve().parent
 MSA_ROOT = REPO_ROOT.parent
 AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")
-SSM_FEATURE_TO_KEY = {
-    "stm": "ssm_stm",
-    "mfcc": "ssm_mfcc",
-    "chroma": "ssm_chroma",
-    "cens": "ssm_cens",
-    "arrangement": "ssm_arrangement",
-    "vocal": "ssm_vocal",
-    "bass": "ssm_bass",
-    "tonnetz": "ssm_tonnetz",
-    "density": "ssm_density",
-    "musicfm": "ssm_musicfm",
-    "muq": "ssm_muq",
-    "matpac": "ssm_matpac",
-    "fused": "ssm_fused",
-}
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
@@ -61,87 +45,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def add_repo_to_path(path: Path) -> None:
-    path = path.resolve()
-    if path.exists() and str(path) not in sys.path:
-        sys.path.insert(0, str(path))
-
-
-def load_module_from_path(module_name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load module {module_name!r} from {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def load_as_seg_cbm_module():
-    module_name = "_local_as_seg_cbm_algorithm"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-
-    class ToDebugException(Exception):
-        pass
-
-    as_seg_pkg = sys.modules.setdefault("as_seg", ModuleType("as_seg"))
-    model_pkg = sys.modules.setdefault("as_seg.model", ModuleType("as_seg.model"))
-    errors_mod = sys.modules.setdefault("as_seg.model.errors", ModuleType("as_seg.model.errors"))
-    errors_mod.ToDebugException = ToDebugException
-    as_seg_pkg.model = model_pkg
-    model_pkg.errors = errors_mod
-    module = ModuleType(module_name)
-    module.__file__ = str(MSA_ROOT / "autosimilarity_segmentation" / "as_seg" / "CBM_algorithm.py")
-    sys.modules[module_name] = module
-    source = Path(module.__file__).read_text(encoding="utf-8")
-    source = source.split("# %% Scikit-learn class", 1)[0]
-    exec(compile(source, module.__file__, "exec"), module.__dict__)
-    return module
-
-
-def load_msaf_foote_module():
-    module_name = "_local_msaf_foote_segmenter"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    module = ModuleType(module_name)
-    module.__file__ = str(MSA_ROOT / "msaf" / "msaf" / "algorithms" / "foote" / "segmenter.py")
-    sys.modules[module_name] = module
-    source = Path(module.__file__).read_text(encoding="utf-8")
-    source = source[source.index("def median_filter") : source.index("class Segmenter")]
-    import scipy.ndimage as ndimage
-    import scipy.signal as signal
-    from scipy.spatial import distance
-
-    module.__dict__.update({"np": np, "ndimage": ndimage, "signal": signal, "distance": distance})
-    exec(compile(source, module.__file__, "exec"), module.__dict__)
-    return module
-
-
-def load_msaf_cbm_module():
-    module_name = "_local_msaf_cbm_algorithm"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-    return load_module_from_path(
-        module_name,
-        MSA_ROOT / "msaf" / "msaf" / "algorithms" / "cbm" / "CBM_algorithm.py",
-    )
-
-
-def normalize_ssm(matrix: np.ndarray) -> np.ndarray:
-    matrix = np.nan_to_num(matrix, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
-    if matrix.size == 0:
-        return matrix
-    matrix = 0.5 * (matrix + matrix.T)
-    lo, hi = np.percentile(matrix, [5, 95])
-    if hi > lo:
-        matrix = np.clip((matrix - lo) / (hi - lo), 0.0, 1.0)
-    else:
-        matrix = np.zeros_like(matrix)
-    np.fill_diagonal(matrix, 1.0)
-    return matrix.astype(np.float32)
-
-
 def parse_segmentation_config(raw_config: dict[str, Any]) -> dict[str, Any]:
     cfg = raw_config.get("segmentation", {})
     if cfg is None:
@@ -149,22 +52,6 @@ def parse_segmentation_config(raw_config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(cfg, dict):
         raise ValueError("`segmentation` must be a mapping in the YAML config.")
     return cfg
-
-
-def normalize_algorithms(items: Iterable[Any] | None) -> list[dict[str, Any]]:
-    if not items:
-        return [{"id": "cbm", "source": "as_seg"}, {"id": "foote", "source": "msaf"}]
-    algorithms = []
-    for item in items:
-        if isinstance(item, str):
-            algorithms.append({"id": item})
-        elif isinstance(item, dict):
-            if "id" not in item:
-                raise ValueError(f"Segmentation algorithm entry lacks an `id`: {item!r}")
-            algorithms.append(dict(item))
-        else:
-            raise ValueError(f"Invalid segmentation algorithm entry: {item!r}")
-    return algorithms
 
 
 def list_audio_files(audio_dir: Path, limit: int | None) -> list[Path]:
@@ -227,51 +114,6 @@ def ensure_features(audio_path: Path, feature_dir: Path, cfg: FeatureConfig) -> 
     return Path(summary["outputs"]["features_npz"])
 
 
-def load_ssm(data: np.lib.npyio.NpzFile, feature: str) -> np.ndarray:
-    key = SSM_FEATURE_TO_KEY.get(feature.lower(), f"ssm_{feature.lower()}")
-    if key not in data:
-        available = sorted(name[4:] for name in data.files if name.startswith("ssm_"))
-        raise ValueError(f"SSM feature {feature!r} not found. Available SSMs: {', '.join(available)}")
-    return normalize_ssm(np.asarray(data[key]))
-
-
-def fuse_ssms_with_graphditty(matrices: list[np.ndarray], fusion_cfg: dict[str, Any]) -> np.ndarray:
-    add_repo_to_path(MSA_ROOT / "GraphDitty")
-    from SimilarityFusion import doSimilarityFusionWs
-
-    if len(matrices) == 1:
-        return normalize_ssm(matrices[0])
-    shapes = {matrix.shape for matrix in matrices}
-    if len(shapes) != 1:
-        raise ValueError(f"Cannot fuse SSMs with different shapes: {sorted(shapes)}")
-    k_nearest = int(fusion_cfg.get("k", fusion_cfg.get("K", 5)))
-    if k_nearest < 0:
-        k_nearest = max(1, int(np.sqrt(matrices[0].shape[0])))
-    fused = doSimilarityFusionWs(
-        [normalize_ssm(matrix) for matrix in matrices],
-        K=k_nearest,
-        niters=int(fusion_cfg.get("niters", 20)),
-        reg_diag=float(fusion_cfg.get("reg_diag", 1.0)),
-        reg_neighbs=float(fusion_cfg.get("reg_neighbs", 0.5)),
-        do_animation=False,
-        verboseTimes=bool(fusion_cfg.get("verbose", False)),
-    )
-    return normalize_ssm(np.asarray(fused))
-
-
-def resolve_segmentation_ssm(
-    data: np.lib.npyio.NpzFile,
-    ssm_features: Iterable[str],
-    fusion_cfg: dict[str, Any],
-) -> tuple[np.ndarray, list[str]]:
-    features = [str(feature).strip().lower() for feature in ssm_features if str(feature).strip()]
-    if not features:
-        raise ValueError("At least one `segmentation.ssm_features` value is required.")
-    matrices = [load_ssm(data, feature) for feature in features]
-    matrix = matrices[0] if len(matrices) == 1 else fuse_ssms_with_graphditty(matrices, fusion_cfg)
-    return normalize_ssm(matrix), features
-
-
 def frame_index_to_times(indices: Iterable[int], n_frames: int, beat_boundaries: np.ndarray, duration: float) -> list[float]:
     idxs = sorted({int(idx) for idx in indices if int(idx) >= 0})
     normalized = []
@@ -285,55 +127,6 @@ def frame_index_to_times(indices: Iterable[int], n_frames: int, beat_boundaries:
     times[0] = 0.0
     times[-1] = float(duration)
     return sorted({round(time_value, 6) for time_value in times})
-
-
-def cbm_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
-    source = str(algorithm.get("source", "as_seg")).lower()
-    if source == "msaf":
-        cbm = load_msaf_cbm_module()
-    else:
-        cbm = load_as_seg_cbm_module()
-
-    params = dict(algorithm.get("params", {}))
-    cbm_kwargs = {
-        "min_size": int(params.get("min_size", 1)),
-        "max_size": int(params.get("max_size", 32)),
-        "penalty_weight": float(params.get("penalty_weight", 1.0)),
-        "penalty_func": str(params.get("penalty_func", "modulo8")),
-        "bands_number": params.get("bands_number", None),
-    }
-    if source != "msaf":
-        cbm_kwargs["compute_score_using_convolve"] = bool(params.get("compute_score_using_convolve", False))
-    segments, _score = cbm.compute_cbm(matrix, **cbm_kwargs)
-    boundaries = [0, matrix.shape[0]]
-    boundaries.extend(int(end) for _start, end in segments)
-    return boundaries
-
-
-def foote_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
-    foote = load_msaf_foote_module()
-    params = dict(algorithm.get("params", {}))
-    gaussian_size = int(params.get("M_gaussian", 66))
-    if gaussian_size % 2 == 1:
-        gaussian_size += 1
-    kernel = foote.compute_gaussian_krnl(gaussian_size)
-    novelty_curve = foote.compute_nc(matrix, kernel)
-    peaks = foote.pick_peaks(novelty_curve, L=int(params.get("L_peaks", 64)))
-    return [0, *map(int, peaks), matrix.shape[0]]
-
-
-def run_algorithm(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
-    algorithm_id = str(algorithm["id"]).lower()
-    if algorithm_id in {"cbm", "as_seg_cbm", "msaf_cbm"}:
-        if algorithm_id == "msaf_cbm" and "source" not in algorithm:
-            algorithm = {**algorithm, "source": "msaf"}
-        return cbm_boundaries(matrix, algorithm)
-    if algorithm_id in {"foote", "msaf_foote"}:
-        return foote_boundaries(matrix, algorithm)
-    raise ValueError(
-        f"Unsupported SSM-based segmentation algorithm {algorithm['id']!r}. "
-        "Supported ids: cbm, as_seg_cbm, msaf_cbm, foote, msaf_foote."
-    )
 
 
 def annotation_intervals(boundary_times: list[float]) -> list[dict[str, Any]]:

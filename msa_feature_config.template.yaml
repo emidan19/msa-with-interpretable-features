@@ -44,7 +44,7 @@ segmentation:
     reg_neighbs: 0.5
     verbose: false
 
-  # Supported SSM-based algorithms:
+  # Supported SSM-based algorithms: "cbm", "as_seg_cbm", "msaf_cbm", "foote", "msaf_foote", "sf", "msaf_sf"
   # - cbm / as_seg_cbm: as-seg CBM, default source for CBM
   # - msaf_cbm: MSAF vendored CBM implementation
   # - foote / msaf_foote: MSAF Foote novelty over the selected SSM
