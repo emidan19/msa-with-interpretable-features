@@ -208,7 +208,7 @@ def process_feature_file(
         for algorithm in algorithms:
             start = time.perf_counter()
             slug = algorithm_slug(algorithm)
-            boundary_indices = run_algorithm(matrix, algorithm)
+            boundary_indices = run_algorithm(matrix, algorithm) if slug not in ["scluster", "msaf_scluster"] else run_algorithm(matrix, algorithm, data)
             boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
             jams_path = experiment_dir / slug / f"{track_id}.jams"
             write_jams(jams_path, audio_path, duration, algorithm, resolved_features, boundary_times)

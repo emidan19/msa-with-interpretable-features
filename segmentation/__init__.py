@@ -22,6 +22,7 @@ from .algorithms import (
     normalize_algorithms,
     run_algorithm,
     sf_boundaries,
+    scluster_boundaries,
 )
 from .ssm import (
     SSM_FEATURE_TO_KEY,
@@ -45,4 +46,5 @@ __all__ = [
     "resolve_segmentation_ssm",
     "run_algorithm",
     "sf_boundaries",
+    "scluster_boundaries",
 ]

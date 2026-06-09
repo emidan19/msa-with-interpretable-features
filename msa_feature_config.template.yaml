@@ -51,17 +51,33 @@ segmentation:
   algorithms:
     - id: cbm
       source: as_seg
+      run: True
       params:
         min_size: 1
         max_size: 32
         penalty_weight: 1.0
         penalty_func: modulo8
         bands_number:
+
     - id: foote
       source: msaf
+      run: True
       params:
         M_gaussian: 66
         L_peaks: 64
+
+    - id: scluster
+      source: msaf
+      run: True
+      params:
+        rep_feature: cens # global representation feature (must be one of the `computing_features` above!)
+        loc_feature: mfcc # local representation feature (must be one of the `computing_features` above!)
+        scluster_k: 4
+        num_layers: 10
+        evec_smooth: 9
+        rec_smooth: 9
+        rec_width: 9
+
 
 feature_config:
   # Optional section annotation directory containing *.CHORUS.TXT files

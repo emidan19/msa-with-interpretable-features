@@ -51,6 +51,8 @@ def normalize_algorithms(items: Iterable[Any] | None) -> list[dict[str, Any]]:
         elif isinstance(item, dict):
             if "id" not in item:
                 raise ValueError(f"Segmentation algorithm entry lacks an `id`: {item!r}")
+            if "run" in item and not bool(item["run"]):
+                continue
             algorithms.append(dict(item))
         else:
             raise ValueError(f"Invalid segmentation algorithm entry: {item!r}")
@@ -114,6 +116,37 @@ def sf_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
     peaks = sf.pick_peaks(novelty_curve, L=mp_adaptive, offset_denom=offset_thres)
     return [0, *map(int, peaks), matrix.shape[0]]
 
+def scluster_boundaries(
+    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any]
+) -> list[int]:
+    """Laplacian spectral-clustering segmentation (McFee & Ellis, 2014).
+
+    This algorithm does not use the SSM; it builds its own recurrence and path
+    affinities from two beat-synchronous feature streams (chroma/PCP + MFCC),
+    computes the normalized Laplacian, and clusters its spectral embedding.
+    Feature keys and clustering parameters are taken from the config, with
+    defaults mirroring ``msaf/.../scluster/config.py``.
+    """
+    scluster = load_msaf_scluster_module()
+    params = dict(algorithm.get("params", {}))
+
+    config = {
+    "rep_feature": str(params.get("rep_feature", "cens")),
+    "loc_feature": str(params.get("loc_feature", "mfcc")),
+    "scluster_k": int(params.get("scluster_k", 4)),
+    "num_layers": int(params.get("num_layers", 10)),
+    "evec_smooth": int(params.get("evec_smooth", 9)),
+    "rec_smooth": int(params.get("rec_smooth", 9)),
+    "rec_width": int(params.get("rec_width", 9)),
+    "hier": False,
+}
+    n_frames = matrix.shape[0]
+    harmonic = _select_feature(features, config["rep_feature"], n_frames)
+    timbral = _select_feature(features, config["loc_feature"], n_frames)
+
+
+    est_idxs, _est_labels, _cnorm = scluster.do_segmentation(harmonic, timbral, config, None)
+    return [0, *map(int, np.asarray(est_idxs)), n_frames]
 
 def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) -> np.ndarray:
     """Return a ``(n_dims, n_frames)`` feature array from the loaded ``.npz``.
@@ -136,36 +169,6 @@ def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) 
     if array.shape[1] != n_frames and array.shape[0] == n_frames:
         array = array.T
     return array
-
-
-def scluster_boundaries(
-    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any]
-) -> list[int]:
-    """Laplacian spectral-clustering segmentation (McFee & Ellis, 2014).
-
-    This algorithm does not use the SSM; it builds its own recurrence and path
-    affinities from two beat-synchronous feature streams (chroma/PCP + MFCC),
-    computes the normalized Laplacian, and clusters its spectral embedding.
-    Feature keys and clustering parameters are taken from the config, with
-    defaults mirroring ``msaf/.../scluster/config.py``.
-    """
-    scluster = load_msaf_scluster_module()
-    params = dict(algorithm.get("params", {}))
-    n_frames = matrix.shape[0]
-    harmonic = _select_feature(features, str(params.get("harmonic_feature", "chroma")), n_frames)
-    timbral = _select_feature(features, str(params.get("timbral_feature", "mfcc")), n_frames)
-
-    config = {
-        "scluster_k": int(params.get("scluster_k", 4)),
-        "num_layers": int(params.get("num_layers", 10)),
-        "evec_smooth": int(params.get("evec_smooth", 9)),
-        "rec_smooth": int(params.get("rec_smooth", 9)),
-        "rec_width": int(params.get("rec_width", 9)),
-        "hier": False,
-    }
-    est_idxs, _est_labels, _cnorm = scluster.do_segmentation(harmonic, timbral, config, None)
-    return [0, *map(int, np.asarray(est_idxs)), n_frames]
-
 
 def run_algorithm(
     matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any] | None = None
