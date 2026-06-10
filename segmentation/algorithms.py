@@ -77,7 +77,7 @@ def cbm_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
     if source != "msaf":
         cbm_kwargs["compute_score_using_convolve"] = bool(params.get("compute_score_using_convolve", False))
     segments, _score = cbm.compute_cbm(matrix, **cbm_kwargs)
-    boundaries = [0, matrix.shape[0]]
+    boundaries = [0]
     boundaries.extend(int(end) for _start, end in segments)
     return boundaries
 
