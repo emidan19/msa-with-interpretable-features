@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 import numpy as np
+import scipy
 
 from .loaders import (
     load_as_seg_cbm_module,
@@ -146,7 +147,7 @@ def scluster_boundaries(
 
 
     est_idxs, _est_labels, _cnorm = scluster.do_segmentation(harmonic, timbral, config, None)
-    return [0, *map(int, np.asarray(est_idxs)), n_frames]
+    return [*map(int, np.asarray(est_idxs)), n_frames]
 
 def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) -> np.ndarray:
     """Return a ``(n_dims, n_frames)`` feature array from the loaded ``.npz``.
@@ -168,6 +169,11 @@ def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) 
     # Orient as (n_dims, n_frames) to match the beat-synchronous SSM grid.
     if array.shape[1] != n_frames and array.shape[0] == n_frames:
         array = array.T
+    elif array.shape[0] != n_frames:
+        # Interpolate time dimention to match n_frames
+        array = scipy.interpolate.interp1d(
+            np.linspace(0, 1, num=array.shape[0]), array, axis=0, kind="nearest", fill_value="extrapolate"
+        )(np.linspace(0, 1, num=n_frames)).T
     return array
 
 def run_algorithm(
