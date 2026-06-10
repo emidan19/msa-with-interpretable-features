@@ -20,6 +20,7 @@ for _cache_dir in (os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"]):
 import numpy as np
 import yaml
 
+from msa_metrics import Segment, cbm_homogeneity_score, segmentation_regularity_metrics
 from segmentation import normalize_algorithms, resolve_segmentation_ssm, run_algorithm
 
 
@@ -75,7 +76,6 @@ def load_config(path: Path | None) -> dict[str, Any]:
 
 def build_feature_config(args: argparse.Namespace, raw_config: dict[str, Any]):
     from dataclasses import asdict
-
     from data_loading import FeatureConfig, config_from_mapping, resolve_value
 
     yaml_cfg = config_from_mapping(raw_config.get("feature_config", raw_config))
@@ -152,6 +152,7 @@ def write_jams(
     algorithm: dict[str, Any],
     ssm_features: list[str],
     boundary_times: list[float],
+    metrics: dict[str, float],
 ) -> None:
     annotation = {
         "namespace": "segment_open",
@@ -166,6 +167,7 @@ def write_jams(
             "boundary_times": boundary_times,
             "ssm_features": ssm_features,
             "algorithm": algorithm,
+            "metrics": metrics,
         },
     }
     jams_payload = {
@@ -177,6 +179,7 @@ def write_jams(
         "sandbox": {
             "audio_path": audio_path,
             "task": "music_structure_segmentation",
+            "metrics": metrics,
         },
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,8 +213,19 @@ def process_feature_file(
             slug = algorithm_slug(algorithm)
             boundary_indices = run_algorithm(matrix, algorithm) if slug not in ["scluster", "msaf_scluster"] else run_algorithm(matrix, algorithm, data)
             boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
+            homogeneity_scores = [
+                cbm_homogeneity_score(matrix, start_idx, end_idx)
+                for start_idx, end_idx in zip(boundary_indices[:-1], boundary_indices[1:])
+            ]
+            cbm_homogeneity = float(np.mean(homogeneity_scores)) if homogeneity_scores else 0.0
+            segments = [
+                Segment(start=float(start), end=float(end), label=f"S{idx + 1:02d}")
+                for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:]))
+            ]
+            regularity_metrics = segmentation_regularity_metrics(segments)
+            metrics = {"cbm_homogeneity": cbm_homogeneity, **regularity_metrics}
             jams_path = experiment_dir / slug / f"{track_id}.jams"
-            write_jams(jams_path, audio_path, duration, algorithm, resolved_features, boundary_times)
+            write_jams(jams_path, audio_path, duration, algorithm, resolved_features, boundary_times, metrics)
             rows.append(
                 {
                     "track_id": track_id,
@@ -223,6 +237,7 @@ def process_feature_file(
                     "elapsed_s": round(time.perf_counter() - start, 3),
                     "features_npz": str(feature_npz),
                     "jams": str(jams_path),
+                    **{key: float(value) for key, value in metrics.items()},
                 }
             )
     return rows
