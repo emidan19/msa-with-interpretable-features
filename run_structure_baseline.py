@@ -208,6 +208,23 @@ def process_feature_file(
         beat_boundaries = np.asarray(data["beat_boundaries"]) if "beat_boundaries" in data else np.array([])
         audio_path = str(np.asarray(data["audio_path"]).item()) if "audio_path" in data else feature_npz.stem
         track_id = Path(audio_path).stem
+        # If we fused multiple SSMs with GraphDitty, save the fused SSM to the
+        # experiment folder so it can be inspected later. Save under
+        # <experiment_dir>/fusion_ssms/<track_id>_fused_ssm.npz with key "ssm_fused".
+        if len(resolved_features) > 1:
+            try:
+                fusion_dir = experiment_dir / "fusion_ssms"
+                fusion_dir.mkdir(parents=True, exist_ok=True)
+                fusion_path = fusion_dir / f"{track_id}_fused_ssm.npz"
+                np.savez_compressed(
+                    fusion_path,
+                    ssm_fused=matrix,
+                    ssm_features=np.asarray(resolved_features, dtype=object),
+                    audio_path=audio_path,
+                )
+            except Exception:
+                # Do not fail the whole run if saving the fused SSM fails.
+                pass
         for algorithm in algorithms:
             start = time.perf_counter()
             slug = algorithm_slug(algorithm)
