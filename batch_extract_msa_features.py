@@ -143,7 +143,6 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "musicfm_shape": shape_str(summary, "musicfm"),
                     "muq_shape": shape_str(summary, "muq"),
                     "matpac_shape": shape_str(summary, "matpac"),
-                    "ssm_shape": shape_str(summary, "ssm_fused"),
                     "features_npz": summary["outputs"]["features_npz"],
                     "preview_png": summary["outputs"]["preview_png"],
                     "preview_svg": summary["outputs"]["preview_svg"],

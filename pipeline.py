@@ -159,10 +159,6 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
     ssm_map = {name: build_ssm(features) for name, features in beat_level_features.items()}
     if "sections" in requested and sections:
         ssm_map["sections"] = build_section_ssm(sections, beat_boundaries)
-    if "fused" in requested:
-        fusion_inputs = [matrix for name, matrix in ssm_map.items() if name != "sections" and matrix.size]
-        if fusion_inputs:
-            ssm_map["fused"] = np.mean(fusion_inputs, axis=0).astype(np.float32)
 
     stem = audio_path.stem
     npz_path = out_dir / f"{stem}_features.npz"
@@ -213,7 +209,7 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
         "audio_path": str(audio_path),
         "duration_s": duration,
         "config": asdict(cfg),
-        "computed_features": sorted(beat_level_features.keys()) + ([name for name in ("sections", "fused") if name in ssm_map]),
+        "computed_features": sorted(beat_level_features.keys()) + (["sections"] if "sections" in ssm_map else []),
         "outputs": {
             "features_npz": str(npz_path),
             "preview_png": str(preview_paths[0]) if "png" in cfg.preview_formats else "",

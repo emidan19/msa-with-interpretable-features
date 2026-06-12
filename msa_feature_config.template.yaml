@@ -96,7 +96,7 @@ feature_config:
   # Computing features
   # Available options:
   # - Classical audio features -
-  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, fused
+  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density
   # - SSL models -
   #   muq, matpac, musicfm
   # - Sections (labels) -  
@@ -114,7 +114,7 @@ feature_config:
 
   # Preview rendering
   # Available options:
-  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections, fused
+  #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections
   preview_features:
     - stm
     - cens
