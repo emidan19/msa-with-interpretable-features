@@ -619,21 +619,11 @@ def segmentation_boundary_metrics(
     # Boundary deviation
     # ---------------------------------------------------------
 
-    ref_boundaries = np.asarray(
-        [segment.start for segment in ref[1:]],
-        dtype=float,
-    )
-
-    est_boundaries = np.asarray(
-        [segment.start for segment in est[1:]],
-        dtype=float,
-    )
-
-    if len(ref_boundaries) > 0 and len(est_boundaries) > 0:
+    if len(ref_intervals) > 0 and len(est_intervals) > 0:
 
         dev_ref_to_est, dev_est_to_ref = mir_eval.segment.deviation(
-            ref_boundaries,
-            est_boundaries,
+            ref_intervals,
+            est_intervals,
         )
 
         result.update(
