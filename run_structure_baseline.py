@@ -240,6 +240,12 @@ def process_feature_file(
                 for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:]))
             ]
 
+            # Reference segments (if available)
+            ref_segments = [
+                Segment(start=float(start), end=float(end), label=f"{idx} : {label}")
+                for idx, (start, end, label) in enumerate(sections) if sections is not None
+            ]
+
             ### Compute metrics
 
             # Homogeneity with convolitonal block-matching (CBM)
