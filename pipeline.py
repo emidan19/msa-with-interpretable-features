@@ -174,6 +174,8 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
     }
     if frame_times.size:
         npz_payload["frame_times"] = frame_times
+    if sections:
+        npz_payload["sections"] = np.array(sections, dtype=object)
     if need_stm:
         npz_payload["stm"] = stm
         npz_payload["stm_times"] = stm_times

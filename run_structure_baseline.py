@@ -20,7 +20,7 @@ for _cache_dir in (os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"]):
 import numpy as np
 import yaml
 
-from msa_metrics import Segment, cbm_homogeneity_score, segmentation_regularity_metrics
+from msa_metrics import Segment, cbm_homogeneity_score, segmentation_regularity_metrics, segmentation_boundary_metrics
 from segmentation import normalize_algorithms, resolve_segmentation_ssm, run_algorithm
 
 
@@ -205,6 +205,7 @@ def process_feature_file(
         matrix, resolved_features = resolve_segmentation_ssm(data, ssm_features, fusion_cfg)
         n_frames = matrix.shape[0]
         duration = float(np.asarray(data["duration"]).item()) if "duration" in data else float(n_frames)
+        sections = np.asarray(data["sections"]) if "sections" in data else None
         beat_boundaries = np.asarray(data["beat_boundaries"]) if "beat_boundaries" in data else np.array([])
         audio_path = str(np.asarray(data["audio_path"]).item()) if "audio_path" in data else feature_npz.stem
         track_id = Path(audio_path).stem
@@ -227,20 +228,36 @@ def process_feature_file(
                 pass
         for algorithm in algorithms:
             start = time.perf_counter()
+            # Get algo name
             slug = algorithm_slug(algorithm)
+            # Run segmentation algo
             boundary_indices = run_algorithm(matrix, algorithm) if slug not in ["scluster", "msaf_scluster"] else run_algorithm(matrix, algorithm, data)
+            # Convert frame indices to times, using beat boundaries if available.
             boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
+            # Set segments
+            segments = [
+                Segment(start=float(start), end=float(end), label=f"S{idx + 1:02d}")
+                for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:]))
+            ]
+
+            ### Compute metrics
+
+            # Homogeneity with convolitonal block-matching (CBM)
             homogeneity_scores = [
                 cbm_homogeneity_score(matrix, start_idx, end_idx)
                 for start_idx, end_idx in zip(boundary_indices[:-1], boundary_indices[1:])
             ]
             cbm_homogeneity = float(np.mean(homogeneity_scores)) if homogeneity_scores else 0.0
-            segments = [
-                Segment(start=float(start), end=float(end), label=f"S{idx + 1:02d}")
-                for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:]))
-            ]
+            
+            # Regularity metrics
             regularity_metrics = segmentation_regularity_metrics(segments)
-            metrics = {"cbm_homogeneity": cbm_homogeneity, **regularity_metrics}
+
+            # Segmentation metrics (if reference available)
+            ref_ssm = data["ssm_sections"] if "ssm_sections" in data else None
+
+            segmentation_metrics = segmentation_boundary_metrics(ref_segments, segments)
+
+            metrics = {"cbm_homogeneity": cbm_homogeneity, **regularity_metrics, **segmentation_metrics}
             jams_path = experiment_dir / slug / f"{track_id}.jams"
             write_jams(jams_path, audio_path, duration, algorithm, resolved_features, boundary_times, metrics)
             rows.append(
