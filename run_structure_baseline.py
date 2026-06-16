@@ -227,7 +227,7 @@ def process_feature_file(
                 # Do not fail the whole run if saving the fused SSM fails.
                 pass
         for algorithm in algorithms:
-            start = time.perf_counter()
+            start_time = time.perf_counter()
             # Get algo name
             slug = algorithm_slug(algorithm)
             # Run segmentation algo
@@ -274,7 +274,7 @@ def process_feature_file(
                     "duration_s": round(duration, 6),
                     "n_ssm_frames": int(n_frames),
                     "n_boundaries": len(boundary_times),
-                    "elapsed_s": round(time.perf_counter() - start, 3),
+                    "elapsed_s": round(time.perf_counter() - start_time, 3),
                     "features_npz": str(feature_npz),
                     "jams": str(jams_path),
                     **{key: float(value) for key, value in metrics.items()},
