@@ -168,6 +168,7 @@ def cbm_segment_score(
     reference_size: int = 8,
     lambda_reg: float = 1.0,
     use_penalty: bool = False,
+    return_homogeneity_penalty: bool = False,
 ) -> float:
     """Compute the CBM segment score.
 
@@ -176,7 +177,7 @@ def cbm_segment_score(
     """
 
     start, end = _validate_segment_bounds(start, end, _validate_square_ssm(ssm).shape[0])
-    score = cbm_homogeneity_score(
+    homogeneity_score = cbm_homogeneity_score(
         ssm,
         start,
         end,
@@ -185,9 +186,13 @@ def cbm_segment_score(
         normalization=normalization,
         reference_size=reference_size,
     )
-    if not use_penalty:
-        return score
-    return score - float(lambda_reg) * cbm_penalty(end - start)
+    if not use_penalty and not return_homogeneity_penalty:
+        return homogeneity_score
+    elif return_homogeneity_penalty:
+        penalty = cbm_penalty(end - start)
+        return np.array([homogeneity_score - float(lambda_reg) * cbm_penalty(end - start), homogeneity_score, float(lambda_reg) * penalty])
+    else:
+        return homogeneity_score - float(lambda_reg) * cbm_penalty(end - start)
 
 
 def coerce_segments(segments: Iterable[Segment | Sequence[float]]) -> list[Segment]:
