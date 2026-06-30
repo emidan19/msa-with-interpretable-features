@@ -311,7 +311,7 @@ def compute_novelty_ssm(
     return novelty
 
 
-def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 1) -> list[SsmRegion]:
+def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8) -> list[SsmRegion]:
     """Build boundary regions between adjacent sections using a diagonal band.
 
     The band width controls how wide the diagonal neighborhood around each
@@ -348,18 +348,62 @@ def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 1) -> list[Ssm
     return boundaries
 
 
+def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list[tuple[SsmRegion, SsmRegion, SsmRegion]]:
+    """Build transition tuples for adjacent section boundaries.
+
+    Each transition contains a boundary region and the left/right sections
+    that it separates.
+    """
+
+    gt = _validate_square_binary_ssm_gt(ssm_gt)
+    sections, _ = extract_ssm_regions(gt)
+    if len(sections) < 2:
+        return []
+
+    ordered_sections = sorted(sections, key=lambda region: int(np.min(region.pixels[:, 0])))
+    transitions: list[tuple[SsmRegion, SsmRegion, SsmRegion]] = []
+    n = gt.shape[0]
+    band_width = max(0, int(band_width))
+
+    for index, (previous_section, next_section) in enumerate(zip(ordered_sections, ordered_sections[1:])):
+        previous_end = int(np.max(previous_section.pixels[:, 0]))
+        next_start = int(np.min(next_section.pixels[:, 0]))
+        boundary_center = int(np.round(0.5 * (previous_end + next_start)))
+        boundary_center = min(max(boundary_center, 0), n - 1)
+
+        row_indices, col_indices = np.indices((n, n))
+        mask = (
+            (np.abs(row_indices - col_indices) <= band_width)
+            & (row_indices >= max(0, boundary_center - band_width))
+            & (row_indices <= min(n - 1, boundary_center + band_width))
+            & (col_indices >= max(0, boundary_center - band_width))
+            & (col_indices <= min(n - 1, boundary_center + band_width))
+        )
+        pixels = np.column_stack(np.nonzero(mask))
+        boundary = SsmRegion(label=index + 1, region_type="boundary", pixels=pixels)
+        transitions.append((boundary, previous_section, next_section))
+
+    return transitions
+
+
 def compute_novelty_scores(
     ssm: np.ndarray,
     ssm_gt: np.ndarray,
     eps: float = 1e-12,
-    boundary_band_width: int = 1,
+    boundary_band_width: int = 8,
     kernel: np.ndarray | None = None,
     L: int = 10,
     var: float = 0.5,
     normalize: bool = True,
     exclude: bool = False,
 ) -> dict[str, Any]:
-    """Compute novelty contrast scores for section boundaries against a local background."""
+    """Compute novelty contrast scores for section transitions.
+
+    Each transition is defined by a boundary region and the two adjacent
+    sections that it separates. The score compares the mean novelty response
+    on the boundary against the average mean novelty response of the left and
+    right sections.
+    """
 
     matrix = _validate_square_ssm(ssm)
     gt = _validate_square_binary_ssm_gt(ssm_gt)
@@ -367,18 +411,22 @@ def compute_novelty_scores(
         raise ValueError("SSM and SSM_GT must have the same shape.")
 
     novelty_response = compute_novelty_ssm(matrix, kernel=kernel, L=L, var=var, normalize=normalize, exclude=exclude)
-    background_mask = ~gt.astype(bool)
-    boundaries = _build_boundary_regions(gt, band_width=boundary_band_width)
+    transitions = _build_boundary_transitions(gt, band_width=boundary_band_width)
     scores = []
-    for boundary in boundaries:
-        local_background = _region_local_background(background_mask, boundary.pixels)
-        scores.append(_region_contrast_score(novelty_response, boundary.pixels, local_background, eps=eps))
+    for boundary, left_section, right_section in transitions:
+        boundary_mean = float(np.mean(novelty_response[boundary.pixels[:, 0]]))
+        left_mean = float(np.mean(novelty_response[left_section.pixels[:, 0]]))
+        right_mean = float(np.mean(novelty_response[right_section.pixels[:, 0]]))
+        section_mean = 0.5 * (left_mean + right_mean)
+        scores.append((boundary_mean - section_mean) / (boundary_mean + section_mean + eps))
 
     return {
         "global": float(np.mean(scores)) if scores else float("nan"),
-        "per_boundary": scores,
-        "boundary_labels": [boundary.label for boundary in boundaries],
-        "boundary_pixels": [boundary.size for boundary in boundaries],
+        "per_transition": scores,
+        "boundary_labels": [boundary.label for boundary, _, _ in transitions],
+        "boundary_pixels": [boundary.size for boundary, _, _ in transitions],
+        "transition_left_labels": [left.label for _, left, _ in transitions],
+        "transition_right_labels": [right.label for _, _, right in transitions],
         "novelty_response": novelty_response,
     }
 
