@@ -386,6 +386,16 @@ def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list
     return transitions
 
 
+def _region_row_span(region: SsmRegion) -> tuple[int, int]:
+    row_indices = region.pixels[:, 0]
+    return int(np.min(row_indices)), int(np.max(row_indices))
+
+
+def _region_temporal_indices(region: SsmRegion) -> np.ndarray:
+    row_start, row_end = _region_row_span(region)
+    return np.arange(row_start, row_end + 1, dtype=int)
+
+
 def compute_novelty_scores(
     ssm: np.ndarray,
     ssm_gt: np.ndarray,
@@ -403,6 +413,10 @@ def compute_novelty_scores(
     sections that it separates. The score compares the mean novelty response
     on the boundary against the average mean novelty response of the left and
     right sections.
+
+    The checkerboard novelty response is signed, so the contrast denominator
+    uses absolute energies. This keeps the score bounded and prevents noisy
+    negative section responses from turning weak boundaries into high scores.
     """
 
     matrix = _validate_square_ssm(ssm)
@@ -413,16 +427,37 @@ def compute_novelty_scores(
     novelty_response = compute_novelty_ssm(matrix, kernel=kernel, L=L, var=var, normalize=normalize, exclude=exclude)
     transitions = _build_boundary_transitions(gt, band_width=boundary_band_width)
     scores = []
+    boundary_means = []
+    left_section_means = []
+    right_section_means = []
+    section_reference_means = []
     for boundary, left_section, right_section in transitions:
-        boundary_mean = float(np.mean(novelty_response[boundary.pixels[:, 0]]))
-        left_mean = float(np.mean(novelty_response[left_section.pixels[:, 0]]))
-        right_mean = float(np.mean(novelty_response[right_section.pixels[:, 0]]))
+        boundary_indices = _region_temporal_indices(boundary)
+        left_indices = np.setdiff1d(_region_temporal_indices(left_section), boundary_indices, assume_unique=True)
+        right_indices = np.setdiff1d(_region_temporal_indices(right_section), boundary_indices, assume_unique=True)
+        if left_indices.size == 0:
+            left_indices = _region_temporal_indices(left_section)
+        if right_indices.size == 0:
+            right_indices = _region_temporal_indices(right_section)
+
+        boundary_mean = float(np.mean(novelty_response[boundary_indices]))
+        left_mean = float(np.mean(novelty_response[left_indices]))
+        right_mean = float(np.mean(novelty_response[right_indices]))
         section_mean = 0.5 * (left_mean + right_mean)
-        scores.append((boundary_mean - section_mean) / (boundary_mean + section_mean + eps))
+        scores.append((boundary_mean - section_mean) / (abs(boundary_mean) + abs(section_mean) + eps))
+        boundary_means.append(boundary_mean)
+        left_section_means.append(left_mean)
+        right_section_means.append(right_mean)
+        section_reference_means.append(section_mean)
 
     return {
         "global": float(np.mean(scores)) if scores else float("nan"),
         "per_transition": scores,
+        "per_boundary": scores,
+        "boundary_means": boundary_means,
+        "left_section_means": left_section_means,
+        "right_section_means": right_section_means,
+        "section_reference_means": section_reference_means,
         "boundary_labels": [boundary.label for boundary, _, _ in transitions],
         "boundary_pixels": [boundary.size for boundary, _, _ in transitions],
         "transition_left_labels": [left.label for _, left, _ in transitions],

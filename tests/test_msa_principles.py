@@ -150,7 +150,7 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
     print("Homogeneity global:", homogeneity["global"])
     print("Repetition per repetition:", repetition["per_repetition"])
     print("Repetition global:", repetition["global"])
-    print("Novelty per transition:", novelty["per_transition"])
+    print("Novelty per boundary:", novelty["per_boundary"])
     print("Novelty response:", novelty["novelty_response"])
     print("Novelty global:", novelty["global"])
 
@@ -165,7 +165,7 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
     print("Homogeneity global:", homogeneity["global"])
     print("Repetition per repetition:", repetition["per_repetition"])
     print("Repetition global:", repetition["global"])
-    print("Novelty per transition:", novelty["per_transition"])
+    print("Novelty per boundary:", novelty["per_boundary"])
     print("Novelty response:", novelty["novelty_response"])
     print("Novelty global:", novelty["global"])
 
@@ -180,12 +180,12 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
     print("Homogeneity global:", homogeneity["global"])
     print("Repetition per repetition:", repetition["per_repetition"])
     print("Repetition global:", repetition["global"])
-    print("Novelty per transition:", novelty["per_transition"])
+    print("Novelty per boundary:", novelty["per_boundary"])
     print("Novelty global:", novelty["global"])
 
     assert len(homogeneity["per_section"]) == section_count
     assert len(repetition["per_repetition"]) == 2
-    assert len(novelty["per_transition"]) == section_count - 1
+    assert len(novelty["per_boundary"]) == section_count - 1
     assert np.isfinite(homogeneity["global"])
     assert np.isfinite(repetition["global"])
     assert np.isfinite(novelty["global"])
