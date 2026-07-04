@@ -4,7 +4,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    plt = None
 
 from msa_principles import (
     compute_homogeneity_scores,
@@ -196,6 +199,9 @@ def _plot_ssm_and_novelty(ssm: np.ndarray, ssm_gt: np.ndarray, novelty_response:
         print("matplotlib is not available, cannot plot SSMs and novelty response.")
         return
 
+    output_dir = REPO_ROOT / "tests"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     axes[0].imshow(ssm_gt, cmap="gray", origin="lower", aspect="auto")
     axes[0].set_title(f"{title} - SSM_GT")
@@ -209,7 +215,7 @@ def _plot_ssm_and_novelty(ssm: np.ndarray, ssm_gt: np.ndarray, novelty_response:
         ax.set_xticks([])
         ax.set_yticks([])
     plt.tight_layout()
-    plt.savefig(f"./tests/{title.replace(' ', '_')}.png")
+    plt.savefig(output_dir / f"{title.replace(' ', '_')}.png")
     plt.show()
 
 
