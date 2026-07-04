@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -8,6 +9,15 @@ try:
     import matplotlib.pyplot as plt
 except ImportError:  # pragma: no cover
     plt = None
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+SCRIPT_PATH = REPO_ROOT / "experiments" / "msa_principles_measure" / "by_similarity_function.py"
+SPEC = importlib.util.spec_from_file_location("by_similarity_function", SCRIPT_PATH)
+by_similarity_function = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(by_similarity_function)
 
 from msa_principles import (
     compute_homogeneity_scores,
@@ -56,7 +66,7 @@ def test_homogeneity_and_novelty_scores_are_finite():
     )
 
     homogeneity = compute_homogeneity_scores(ssm, ssm_gt)
-    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=2, L=2)
+    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=1, L=3, exclude=False)
 
     assert len(homogeneity["per_section"]) == 2
     assert np.isfinite(homogeneity["global"])
@@ -79,7 +89,7 @@ def test_novelty_scores_returns_transition_scores():
         dtype=int,
     )
 
-    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=2, L=2)
+    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=1, L=3, exclude=False)
 
     assert "per_transition" in novelty
     assert len(novelty["per_transition"]) == 2
@@ -95,6 +105,24 @@ def test_ssm_quality_metrics_returns_expected_keys():
 
     assert set(metrics) >= {"homogeneity", "repetition", "novelty"}
     assert metrics["section_count"] == 3
+
+
+def test_evaluate_feature_similarity_returns_expected_keys():
+    features = np.array([[1.0, 0.2], [0.9, 0.3], [0.1, 0.8]], dtype=float)
+    bundle = {"beat_stm": features, "ssm_sections": np.array([[1, 0], [0, 1]], dtype=int)}
+
+    result = by_similarity_function.evaluate_feature_similarity(
+        "stm",
+        bundle,
+        np.array([[1, 0], [0, 1]], dtype=int),
+        similarity_type="cosine",
+    )
+
+    assert result["feature"] == "stm"
+    assert result["similarity_type"] == "cosine"
+    assert set(result["metrics"]) >= {"homogeneity", "repetition", "novelty"}
+    assert set(result["region_scores"]) >= {"section_mean", "repetition_mean", "background_mean"}
+    assert np.isfinite(result["metrics"]["homogeneity"]["global"])
 
 
 def test_contrast_scores_for_sections_repetitions_and_novelty():
@@ -144,7 +172,7 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
 
     homogeneity = compute_homogeneity_scores(ssm_gt, ssm_gt)
     repetition = compute_repetition_scores(ssm_gt, ssm_gt)
-    novelty = compute_novelty_scores(ssm_gt, ssm_gt, boundary_band_width=2, L=2)
+    novelty = compute_novelty_scores(ssm_gt, ssm_gt, boundary_band_width=1, L=3, exclude=False)
 
     print('\n### SCORES FOR GROUND-TRUTH SSM ###')
     if plt is not None:
@@ -159,7 +187,7 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
 
     homogeneity = compute_homogeneity_scores(ssm, ssm_gt)
     repetition = compute_repetition_scores(ssm, ssm_gt)
-    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=2, L=2)
+    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=1, L=3, exclude=False)
 
     print('\n### SCORES FOR SSM ###')
     if plt is not None:
@@ -174,7 +202,7 @@ def test_contrast_scores_for_sections_repetitions_and_novelty():
 
     homogeneity = compute_homogeneity_scores(bad_ssm, ssm_gt)
     repetition = compute_repetition_scores(bad_ssm, ssm_gt)
-    novelty = compute_novelty_scores(bad_ssm, ssm_gt, boundary_band_width=2, L=2)
+    novelty = compute_novelty_scores(bad_ssm, ssm_gt, boundary_band_width=1, L=3, exclude=False)
 
     print('\n### SCORES FOR BAD SSM ###')
     if plt is not None:

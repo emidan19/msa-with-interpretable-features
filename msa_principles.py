@@ -400,9 +400,9 @@ def compute_novelty_scores(
     ssm: np.ndarray,
     ssm_gt: np.ndarray,
     eps: float = 1e-12,
-    boundary_band_width: int = 8,
+    boundary_band_width: int = 3,
     kernel: np.ndarray | None = None,
-    L: int = 10,
+    L: int = 16,
     var: float = 0.5,
     normalize: bool = True,
     exclude: bool = False,
@@ -466,7 +466,7 @@ def compute_novelty_scores(
     }
 
 
-def ssm_quality_metrics(ssm: np.ndarray, ssm_gt: np.ndarray, *, eps: float = 1e-12, boundary_band_width: int = 1) -> dict[str, Any]:
+def ssm_quality_metrics(ssm: np.ndarray, ssm_gt: np.ndarray, *, eps: float = 1e-12, boundary_band_width: int = 4) -> dict[str, Any]:
     """Compute quality metrics for SSM against a binary structural SSM_GT."""
 
     matrix = _validate_square_ssm(ssm)
