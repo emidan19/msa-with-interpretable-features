@@ -351,8 +351,8 @@ def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8) -> list[Ssm
 def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list[tuple[SsmRegion, SsmRegion, SsmRegion]]:
     """Build transition tuples for adjacent section boundaries.
 
-    Each transition contains a boundary region and the left/right sections
-    that it separates.
+    Each transition contains a boundary region and the boundary-facing half of
+    the left/right sections that it separates.
     """
 
     gt = _validate_square_binary_ssm_gt(ssm_gt)
@@ -366,24 +366,47 @@ def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list
     band_width = max(0, int(band_width))
 
     for index, (previous_section, next_section) in enumerate(zip(ordered_sections, ordered_sections[1:])):
+        previous_start = int(np.min(previous_section.pixels[:, 0]))
         previous_end = int(np.max(previous_section.pixels[:, 0]))
         next_start = int(np.min(next_section.pixels[:, 0]))
+        next_end = int(np.max(next_section.pixels[:, 0]))
         boundary_center = int(np.round(0.5 * (previous_end + next_start)))
         boundary_center = min(max(boundary_center, 0), n - 1)
+        boundary_start = max(0, boundary_center - band_width)
+        boundary_end = min(n - 1, boundary_center + band_width)
 
         row_indices, col_indices = np.indices((n, n))
         mask = (
             (np.abs(row_indices - col_indices) <= band_width)
-            & (row_indices >= max(0, boundary_center - band_width))
-            & (row_indices <= min(n - 1, boundary_center + band_width))
-            & (col_indices >= max(0, boundary_center - band_width))
-            & (col_indices <= min(n - 1, boundary_center + band_width))
+            & (row_indices >= boundary_start)
+            & (row_indices <= boundary_end)
+            & (col_indices >= boundary_start)
+            & (col_indices <= boundary_end)
         )
         pixels = np.column_stack(np.nonzero(mask))
         boundary = SsmRegion(label=index + 1, region_type="boundary", pixels=pixels)
-        transitions.append((boundary, previous_section, next_section))
+
+        previous_middle = int(np.round(0.5 * (previous_start + previous_end)))
+        next_middle = int(np.round(0.5 * (next_start + next_end)))
+        previous_context = _slice_region_by_rows(previous_section, previous_middle, boundary_start - 1)
+        next_context = _slice_region_by_rows(next_section, boundary_end + 1, next_middle)
+        transitions.append((boundary, previous_context, next_context))
 
     return transitions
+
+
+def _slice_region_by_rows(region: SsmRegion, row_start: int, row_end: int) -> SsmRegion:
+    region_start, region_end = _region_row_span(region)
+    row_start = max(region_start, int(row_start))
+    row_end = min(region_end, int(row_end))
+    if row_start > row_end:
+        row_start, row_end = region_start, region_end
+
+    row_mask = (region.pixels[:, 0] >= row_start) & (region.pixels[:, 0] <= row_end)
+    pixels = region.pixels[row_mask]
+    if pixels.size == 0:
+        pixels = region.pixels
+    return SsmRegion(label=region.label, region_type=region.region_type, pixels=pixels)
 
 
 def _region_row_span(region: SsmRegion) -> tuple[int, int]:
