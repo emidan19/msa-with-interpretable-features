@@ -37,7 +37,9 @@ MANIFEST
 
 # Features and results
 feature_outputs/
-experiments/
+experiments/**
+!experiments/msa_principles_measure/
+!/experiments/msa_principles_measure/by_similarity_function.py
 
 # Installer logs
 pip-log.txt

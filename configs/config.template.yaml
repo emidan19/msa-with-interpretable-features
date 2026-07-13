@@ -14,10 +14,10 @@ audio_path: path/to/song.wav
 
 # Batch mode only:
 audio_dir: /home/emartinez/data/public/RWC-Music-Database/Popular-Music
-limit: 100
+limit: 10
 
 # Shared output directory:
-out_dir: feature_outputs/example_run
+out_dir: feature_outputs/example_sections
 
 # Structure baseline mode:
 #   python run_structure_baseline.py --config msa_feature_config.template.yaml
@@ -26,15 +26,14 @@ out_dir: feature_outputs/example_run
 # `audio_dir` into `out_dir` before segmentation. If it is set, the runner
 # reads *_features.npz files from that folder.
 segmentation:
-  feature_dir: feature_outputs/example_run
-  experiment_dir: experiments/structure_baseline/example_run
+  feature_dir: feature_outputs/example_sections
+  experiment_dir: experiments/structure_baseline/example_sections
 
   # One SSM feature is passed directly to every segmentation algorithm.
   # If more than one is listed, GraphDitty similarity network fusion is used
   # and the fused SSM is passed to every algorithm.
   ssm_features:
-    - mfcc
-    - cens
+    - musicfm
     - stm
 
   graphditty_fusion:
@@ -70,8 +69,8 @@ segmentation:
       source: msaf
       run: True
       params:
-        rep_feature: cens # global representation feature (must be one of the `computing_features` above!)
-        loc_feature: mfcc # local representation feature (must be one of the `computing_features` above!)
+        rep_feature: stm # global representation feature (must be one of the `computing_features` above!)
+        loc_feature: musicfm # local representation feature (must be one of the `computing_features` above!)
         scluster_k: 4
         num_layers: 10
         evec_smooth: 9
@@ -108,7 +107,6 @@ feature_config:
     - chroma
     - mfcc
     - sections
-    - matpac
     - muq
     - musicfm
 
@@ -121,7 +119,6 @@ feature_config:
     - chroma
     - mfcc
     - sections
-    - matpac
     - muq
     - musicfm
 
@@ -130,6 +127,11 @@ feature_config:
   preview_formats:
     - png
     - svg
+
+  # SSM similarity selection
+  # Supported values: cosine, autocorrelation, covariance, rbf, centered_rbf
+  ssm_similarity_type: cosine
+  ssm_similarity_gamma: null
 
   # STM parameters
   stm_coeffs: 400

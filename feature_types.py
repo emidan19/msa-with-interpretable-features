@@ -9,9 +9,11 @@ ensure_local_cache()
 import librosa
 import numpy as np
 from scipy.signal import detrend
-from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances, rbf_kernel
 
 from data_loading import FeatureConfig
+
+EPS = 1e-10
 
 
 def safe_nan_to_num(x: np.ndarray) -> np.ndarray:
@@ -25,11 +27,67 @@ def zscore_columns(x: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     return (x - mean) / np.maximum(std, eps)
 
 
-def build_ssm(features: np.ndarray) -> np.ndarray:
+def _normalize_rows(x: np.ndarray) -> np.ndarray:
+    norm = np.linalg.norm(x, axis=1, keepdims=True)
+    return x / np.maximum(norm, EPS)
+
+
+def _estimate_rbf_gamma(x: np.ndarray, scaling_factor: float = 1.0, no_diag: bool = True, normalise: bool = True) -> float:
+    if normalise:
+        x = _normalize_rows(x)
+
+    distances = euclidean_distances(x)
+    if no_diag:
+        distances = distances.copy()
+        np.fill_diagonal(distances, np.nan)
+        denom = 2.0 * np.nanstd(distances)
+    else:
+        denom = 2.0 * np.std(distances)
+
+    if not np.isfinite(denom) or denom <= 0.0:
+        return 1.0
+    return float(scaling_factor / denom)
+
+
+def build_ssm(
+    features: np.ndarray,
+    similarity_type: str = "cosine",
+    gamma: float | None = None,
+    normalise: bool = True,
+) -> np.ndarray:
     if features.size == 0 or features.shape[1] == 0:
         return np.zeros((0, 0), dtype=np.float32)
+
     x = zscore_columns(features).T
-    return cosine_similarity(x).astype(np.float32)
+    kind = str(similarity_type).strip().lower()
+
+    if kind in {"cosine"}:
+        return cosine_similarity(x).astype(np.float32)
+
+    if kind in {"autocorrelation", "covariance"}:
+        centered = x - x.mean(axis=0, keepdims=True)
+        if normalise:
+            centered = _normalize_rows(centered)
+        return (centered @ centered.T).astype(np.float32)
+
+    if kind in {"rbf"}:
+        if gamma is None:
+            gamma = _estimate_rbf_gamma(x, scaling_factor=1.0, no_diag=True, normalise=normalise)
+        if normalise:
+            x = _normalize_rows(x)
+        return rbf_kernel(x, gamma=gamma).astype(np.float32)
+
+    if kind in {"centered_rbf"}:
+        centered = x - x.mean(axis=0, keepdims=True)
+        if gamma is None:
+            gamma = _estimate_rbf_gamma(centered, scaling_factor=1.0, no_diag=True, normalise=normalise)
+        if normalise:
+            centered = _normalize_rows(centered)
+        return rbf_kernel(centered, gamma=gamma).astype(np.float32)
+
+    raise ValueError(
+        f"Unknown similarity type: {similarity_type!r}. Expected one of cosine, autocorrelation, covariance, rbf, centered_rbf."
+    )
 
 
 def build_section_ssm(
