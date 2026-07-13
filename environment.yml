@@ -11,6 +11,7 @@ dependencies:
   - pysoundfile
   - pandas
   - matplotlib
+  - scikit-image
   - scikit-learn
   - pytorch=2.4.1
   - torchaudio=2.4.1

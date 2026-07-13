@@ -156,7 +156,14 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
             ssl_times = np.linspace(0.0, duration, num=features.shape[1], endpoint=False, dtype=np.float32)
             beat_level_features[name] = aggregate_by_intervals(features, ssl_times, beat_boundaries)
 
-    ssm_map = {name: build_ssm(features) for name, features in beat_level_features.items()}
+    ssm_map = {
+        name: build_ssm(
+            features,
+            similarity_type=cfg.ssm_similarity_type,
+            gamma=cfg.ssm_similarity_gamma,
+        )
+        for name, features in beat_level_features.items()
+    }
     if "sections" in requested and sections:
         ssm_map["sections"] = build_section_ssm(sections, beat_boundaries)
 
@@ -174,6 +181,8 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
     }
     if frame_times.size:
         npz_payload["frame_times"] = frame_times
+    if sections:
+        npz_payload["sections"] = np.array(sections, dtype=object)
     if need_stm:
         npz_payload["stm"] = stm
         npz_payload["stm_times"] = stm_times

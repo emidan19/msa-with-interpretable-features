@@ -42,6 +42,8 @@ class FeatureConfig:
     computing_features: tuple[str, ...] = ("stm", "cens", "sections", "fused")
     preview_features: tuple[str, ...] = ("stm", "cens", "sections")
     preview_formats: tuple[str, ...] = ("png", "svg")
+    ssm_similarity_type: str = "cosine"
+    ssm_similarity_gamma: float | None = None
     stm_window_s: float = 8.0
     stm_hop_s: float = 0.5
     stm_min_beats: int = 5
@@ -165,6 +167,25 @@ def normalize_preview_formats(formats: Iterable[str] | None) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def normalize_ssm_similarity_type(similarity_type: str | None) -> str:
+    if similarity_type is None:
+        return "cosine"
+    normalized = str(similarity_type).strip().lower()
+    aliases = {
+        "autocorr": "autocorrelation",
+        "autocorrelation": "autocorrelation",
+        "covariance": "autocorrelation",
+        "rbf": "rbf",
+        "centered_rbf": "centered_rbf",
+        "cosine": "cosine",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unknown SSM similarity type: {similarity_type!r}. Valid options: cosine, autocorrelation, covariance, rbf, centered_rbf"
+        )
+    return aliases[normalized]
+
+
 def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
     payload = dict(data)
     for path_key in (
@@ -182,6 +203,10 @@ def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
         payload["preview_features"] = normalize_preview_features(payload["preview_features"])
     if "preview_formats" in payload:
         payload["preview_formats"] = normalize_preview_formats(payload["preview_formats"])
+    if "ssm_similarity_type" in payload:
+        payload["ssm_similarity_type"] = normalize_ssm_similarity_type(payload["ssm_similarity_type"])
+    if "ssm_similarity_gamma" in payload and payload["ssm_similarity_gamma"] is not None:
+        payload["ssm_similarity_gamma"] = float(payload["ssm_similarity_gamma"])
     return FeatureConfig(**payload)
 
 

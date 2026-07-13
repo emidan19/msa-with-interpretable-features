@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import numpy as np
+import mir_eval
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,7 @@ def cbm_segment_score(
     reference_size: int = 8,
     lambda_reg: float = 1.0,
     use_penalty: bool = False,
+    return_homogeneity_penalty: bool = False,
 ) -> float:
     """Compute the CBM segment score.
 
@@ -175,7 +177,7 @@ def cbm_segment_score(
     """
 
     start, end = _validate_segment_bounds(start, end, _validate_square_ssm(ssm).shape[0])
-    score = cbm_homogeneity_score(
+    homogeneity_score = cbm_homogeneity_score(
         ssm,
         start,
         end,
@@ -184,9 +186,13 @@ def cbm_segment_score(
         normalization=normalization,
         reference_size=reference_size,
     )
-    if not use_penalty:
-        return score
-    return score - float(lambda_reg) * cbm_penalty(end - start)
+    if not use_penalty and not return_homogeneity_penalty:
+        return homogeneity_score
+    elif return_homogeneity_penalty:
+        penalty = cbm_penalty(end - start)
+        return np.array([homogeneity_score - float(lambda_reg) * cbm_penalty(end - start), homogeneity_score, float(lambda_reg) * penalty])
+    else:
+        return homogeneity_score - float(lambda_reg) * cbm_penalty(end - start)
 
 
 def coerce_segments(segments: Iterable[Segment | Sequence[float]]) -> list[Segment]:
@@ -561,6 +567,86 @@ def segmentation_regularity_metrics(
         )
     return result
 
+def segmentation_boundary_metrics(
+    reference_segments: Iterable[Segment | Sequence[float]],
+    estimated_segments: Iterable[Segment | Sequence[float]],
+    *,
+    boundary_windows: Sequence[float] = (0.5, 3.0),
+) -> dict[str, float]:
+    """
+    Compute boundary-based segmentation metrics from segment intervals.
+    """
+
+    ref = coerce_segments(reference_segments)
+    est = coerce_segments(estimated_segments)
+
+    if not ref:
+        raise ValueError("reference_segments is empty.")
+
+    if not est:
+        raise ValueError("estimated_segments is empty.")
+
+    ref_intervals = np.asarray(
+        [[seg.start, seg.end] for seg in ref],
+        dtype=float,
+    )
+
+    est_intervals = np.asarray(
+        [[seg.start, seg.end] for seg in est],
+        dtype=float,
+    )
+
+    result = {}
+
+    # ---------------------------------------------------------
+    # Boundary detection
+    # ---------------------------------------------------------
+
+    for window in boundary_windows:
+
+        precision, recall, f_measure = mir_eval.segment.detection(
+            ref_intervals,
+            est_intervals,
+            window=float(window),
+        )
+
+        suffix = str(window).replace(".", "_")
+
+        result.update(
+            {
+                f"boundary_precision_{suffix}s": float(precision),
+                f"boundary_recall_{suffix}s": float(recall),
+                f"boundary_f_{suffix}s": float(f_measure),
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Boundary deviation
+    # ---------------------------------------------------------
+
+    if len(ref_intervals) > 0 and len(est_intervals) > 0:
+
+        dev_ref_to_est, dev_est_to_ref = mir_eval.segment.deviation(
+            ref_intervals,
+            est_intervals,
+        )
+
+        result.update(
+            {
+                "median_deviation_ref_to_est_s": float(dev_ref_to_est),
+                "median_deviation_est_to_ref_s": float(dev_est_to_ref),
+            }
+        )
+    else:
+
+        result.update(
+            {
+                "median_deviation_ref_to_est_s": np.nan,
+                "median_deviation_est_to_ref_s": np.nan,
+            }
+        )
+
+    return result
 
 __all__ = [
     "Path",
@@ -597,4 +683,5 @@ __all__ = [
     "hierarchical_regularity_absolute",
     "hierarchical_balance_absolute",
     "segmentation_regularity_metrics",
+    "segmentation_boundary_metrics",
 ]
