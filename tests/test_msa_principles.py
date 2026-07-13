@@ -273,7 +273,7 @@ def _plot_mask_overlay(ax, base: np.ndarray, masks: list[tuple[np.ndarray, str, 
     ax.set_title(title)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.legend(loc="upper right", fontsize=7)
+    ax.legend(loc="upper right", fontsize=10)
 
 
 def save_ground_truth_score_region_diagnostics(
@@ -300,7 +300,7 @@ def save_ground_truth_score_region_diagnostics(
         _plot_mask_overlay(
             axes_flat[panel_index],
             ssm_gt,
-            [(background_mask, "tab:orange", "local contrast region"), (region_mask, "tab:blue", "section")],
+            [(background_mask, "tab:orange", r'local contrast region $B_s$'), (region_mask, "tab:blue", r'section $s$')],
             f"Homogeneity section {section_index}",
         )
         panel_index += 1
@@ -311,7 +311,7 @@ def save_ground_truth_score_region_diagnostics(
         _plot_mask_overlay(
             axes_flat[panel_index],
             ssm_gt,
-            [(background_mask, "tab:orange", "local contrast region"), (region_mask, "tab:green", "repetition")],
+            [(background_mask, "tab:orange", r'local contrast region $B_r$'), (region_mask, "tab:green", r'repetition $r$')],
             f"Repetition region {repetition_index}",
         )
         panel_index += 1
@@ -321,6 +321,8 @@ def save_ground_truth_score_region_diagnostics(
         ax = axes_flat[panel_index]
         left_start, left_end = _region_row_span(left_section.pixels)
         right_start, right_end = _region_row_span(right_section.pixels)
+        left_middle = int(np.round(0.5 * (left_start + left_end)))
+        right_middle = int(np.round(0.5 * (right_start + right_end)))
         boundary_center = int(np.round(0.5 * (left_end + right_start)))
         boundary_start = max(0, boundary_center - band_width)
         boundary_end = min(ssm_gt.shape[0] - 1, boundary_center + band_width)
@@ -330,15 +332,15 @@ def save_ground_truth_score_region_diagnostics(
 
         ax.imshow(ssm_gt, cmap="gray_r", origin="lower", aspect="equal", interpolation="nearest")
         if left_indices.size:
-            ax.axvspan(left_indices.min() - 0.5, left_indices.max() + 0.5, color="tab:blue", alpha=0.25, label="left section samples")
+            ax.axvspan(left_middle - 0.5, boundary_start -1 + 0.5, color="tab:blue", alpha=0.25, label=r'left section samples $s_L$')
         if right_indices.size:
-            ax.axvspan(right_indices.min() - 0.5, right_indices.max() + 0.5, color="tab:green", alpha=0.25, label="right section samples")
-        ax.axvspan(boundary_start - 0.5, boundary_end + 0.5, color="yellow", alpha=0.35, label="boundary margin")
-        ax.axvline(boundary_center, color="yellow", linewidth=2.5, label="transition center")
+            ax.axvspan(boundary_end + 0.5, right_middle + 0.5, color="tab:green", alpha=0.25, label=r'right section samples $s_R$')
+        ax.axvspan(boundary_start - 0.5, boundary_end + 0.5, color="yellow", alpha=0.35, label=r'transition region $b$')
+        ax.axvline(boundary_center, color="yellow", linewidth=2.5, label=r'transition center $t_b$')
         ax.set_title(f"Novelty transition {transition_index}")
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.legend(loc="upper right", fontsize=7)
+        ax.legend(loc="upper right", fontsize=10)
         panel_index += 1
 
     for ax in axes_flat[panel_index:]:
