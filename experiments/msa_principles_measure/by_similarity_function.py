@@ -354,24 +354,16 @@ def save_all_ssm_images(npz_paths: list[Path], output_dir: Path, similarity_type
     return saved
 
 
-def _choose_primary_beat_feature(bundle: dict) -> str | None:
-    keys = [k for k in bundle.keys()]
-    beat_keys = [k for k in keys if k.startswith("beat_")]
-    if not beat_keys:
-        return None
-    # prefer beat_stm or beat_cens
-    for pref in ("beat_stm", "beat_cens", "beat_mfcc"):
-        if pref in beat_keys:
-            return pref
-    return beat_keys[0]
-
-
 def save_combined_ssm_svgs(npz_paths: list[Path], output_dir: Path, similarity_types: tuple[str, ...], gamma: float | None = None) -> list[Path]:
-    """For each song bundle, save a single SVG with one column per similarity type.
+    """For each song bundle, save a single SVG with all feature SSMs.
 
-    Each column shows the SSM (with section/repetition boxes) and the novelty response below.
+    For each feature, one row shows the SSMs with one column per similarity
+    type, and the row below shows each corresponding novelty response.
     File is saved as <song>_SSMs.svg inside output_dir/SSMs/.
     """
+    if not similarity_types:
+        raise ValueError("At least one similarity type is required.")
+
     saved: list[Path] = []
     for npz_path in npz_paths:
         bundle = load_feature_bundle(npz_path)
@@ -381,44 +373,69 @@ def save_combined_ssm_svgs(npz_paths: list[Path], output_dir: Path, similarity_t
         target_song_dir = output_dir / "SSMs"
         target_song_dir.mkdir(parents=True, exist_ok=True)
 
-        primary_key = _choose_primary_beat_feature(bundle)
-        if primary_key is None:
+        feature_names = list_feature_names(bundle)
+        if not feature_names:
             continue
-        features = np.asarray(bundle[primary_key], dtype=float)
 
-        n = len(similarity_types)
-        fig, axes = plt.subplots(2, n, figsize=(4 * max(1, n), 6), constrained_layout=True)
-        if n == 1:
-            axes = axes.reshape(2, 1)
+        n_cols = len(similarity_types)
+        n_rows = 2 * len(feature_names)
+        ssm_axis_inches = 4.0
+        novelty_axis_inches = 1.5
+        height_ratios = [ssm_axis_inches if row_index % 2 == 0 else novelty_axis_inches for row_index in range(n_rows)]
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(ssm_axis_inches * max(1, n_cols), sum(height_ratios) + 1.5),
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": height_ratios},
+        )
+        axes = np.asarray(axes).reshape(n_rows, n_cols)
 
-        for i, similarity_type in enumerate(similarity_types):
-            try:
-                ssm = np.abs(build_ssm(features, similarity_type=similarity_type, gamma=gamma))
-            except Exception:
-                axes[0, i].text(0.5, 0.5, f"Failed: {similarity_type}", ha="center", va="center")
-                axes[1, i].text(0.5, 0.5, "No novelty", ha="center", va="center")
-                continue
+        for feature_index, feature_name in enumerate(feature_names):
+            beat_key = f"beat_{feature_name}"
+            features = np.asarray(bundle[beat_key], dtype=float)
+            ssm_row = 2 * feature_index
+            novelty_row = ssm_row + 1
 
-            vmin, vmax = _finite_limits(ssm)
-            axes[0, i].imshow(ssm, origin="lower", aspect="auto", cmap="magma", vmin=vmin, vmax=vmax)
-            _plot_region_boxes(axes[0, i], sections, "cyan", "section")
-            _plot_region_boxes(axes[0, i], repetitions, "lime", "repetition")
-            axes[0, i].set_title(f"{similarity_type}")
-            axes[0, i].set_xticks([])
-            axes[0, i].set_yticks([])
+            for col_index, similarity_type in enumerate(similarity_types):
+                ssm_ax = axes[ssm_row, col_index]
+                novelty_ax = axes[novelty_row, col_index]
 
-            novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True)
-            novelty_response = novelty.get("novelty_response")
-            if novelty_response is not None:
-                axes[1, i].plot(novelty_response, color="tab:purple", linewidth=1.2)
-            else:
-                axes[1, i].text(0.5, 0.5, "No novelty response", ha="center", va="center")
-            axes[1, i].set_xlabel("Frame / beat index")
-            axes[1, i].set_ylabel("Novelty")
-            axes[1, i].grid(alpha=0.2)
+                try:
+                    ssm = np.abs(build_ssm(features, similarity_type=similarity_type, gamma=gamma))
+                except Exception as exc:
+                    ssm_ax.text(0.5, 0.5, f"Failed: {similarity_type}\n{exc}", ha="center", va="center")
+                    novelty_ax.text(0.5, 0.5, "No novelty", ha="center", va="center")
+                    for ax in (ssm_ax, novelty_ax):
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                    continue
+
+                vmin, vmax = _finite_limits(ssm)
+                ssm_ax.imshow(ssm, origin="lower", aspect="equal", cmap="magma", vmin=vmin, vmax=vmax)
+                ssm_ax.set_box_aspect(1)
+                _plot_region_boxes(ssm_ax, sections, "cyan", "section")
+                _plot_region_boxes(ssm_ax, repetitions, "lime", "repetition")
+                ssm_ax.set_xticks([])
+                ssm_ax.set_yticks([])
+
+                novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True)
+                novelty_response = novelty.get("novelty_response")
+                if novelty_response is not None:
+                    novelty_ax.plot(novelty_response, color="tab:purple", linewidth=1.2)
+                else:
+                    novelty_ax.text(0.5, 0.5, "No novelty response", ha="center", va="center")
+                novelty_ax.set_xlabel("Frame / beat index")
+                novelty_ax.grid(alpha=0.2)
+
+                if feature_index == 0:
+                    ssm_ax.set_title(similarity_type)
+                if col_index == 0:
+                    ssm_ax.set_ylabel(f"{feature_name}\nSSM")
+                    novelty_ax.set_ylabel(f"{feature_name}\nNovelty")
 
         out_path = target_song_dir / f"{song_name}_SSMs.svg"
-        fig.suptitle(f"{song_name} - primary:{primary_key}")
+        fig.suptitle(f"{song_name} - SSMs by feature and similarity")
         fig.savefig(out_path, format="svg", bbox_inches="tight")
         plt.close(fig)
         saved.append(out_path)
@@ -447,7 +464,7 @@ def run_comparison(
     target_dir = output_dir if output_dir is not None else project_dir / "experiments" / "msa_principles_measure" / "similarity_comparison_outputs"
     target_dir.mkdir(parents=True, exist_ok=True)
     results_df.to_csv(target_dir / "similarity_comparison_results.csv", index=False)
-    # Save combined per-song SSM SVGs (one column per similarity type)
+    # Save combined per-song SSM SVGs (two rows per feature, one column per similarity type)
     saved_ssm_paths = save_combined_ssm_svgs(npz_paths, target_dir, similarity_types=similarity_types, gamma=gamma)
     print(f"Wrote {len(saved_ssm_paths)} combined SSM SVGs to {target_dir / 'SSMs'}")
     saved_paths = save_global_comparison_plots(results_df, target_dir)
