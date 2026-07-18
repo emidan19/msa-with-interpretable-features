@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from html import parser
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ DEFAULT_RANDOM_SEED = 123
 DEFAULT_NUM_GT_EXAMPLES = 3
 DEFAULT_N_SIM = 4
 DEFAULT_OUTPUT_FILENAME = "ssm_simulation_examples.png"
+MAX_N_SIM_SHOW = 10
 
 
 def resolve_project_dir(start_dir: Path | None = None) -> Path:
@@ -732,6 +734,223 @@ def run_comparison(
     print(results_df.head().to_string(index=False))
     return results_df, saved_paths
 
+def scores_from_ssms(ssms: np.ndarray, 
+                     ssms_gt: np.ndarray, 
+                     length_stats: dict[str, float], 
+                     args: argparse.Namespace
+    ) -> dict[str, Any]:
+    
+    results = {
+        "gt": {
+            "homogeneity": [],
+            "repetition": [],
+            "novelty": [],
+        },
+        "sim": {
+            "homogeneity": [],
+            "repetition": [],
+            "novelty": [],
+        },
+        "p_values": {
+            "homogeneity": [],
+            "repetition": [],
+            "novelty": [],
+            },
+        }
+
+    for ssm, ssm_gt in zip(ssms, ssms_gt):
+        if ssm.shape != ssm_gt.shape:
+            raise ValueError(f"SSM shape mismatch: got {ssm.shape}, expected {ssm_gt.shape}.")
+
+    
+
+        homogeneity_gt_mask = compute_homogeneity_scores(ssm_gt, ssm_gt)['global']
+        repetition_gt_mask = compute_repetition_scores(ssm_gt, ssm_gt)['global']
+        novelty_gt_mask = compute_novelty_scores(ssm_gt,ssm_gt,boundary_band_width=3,L=16,var=0.5,exclude=True)['global']
+
+        # Ground truth mask
+        results["gt"]["homogeneity"].append(homogeneity_gt_mask)
+        results["gt"]["repetition"].append(repetition_gt_mask)
+        results["gt"]["novelty"].append(novelty_gt_mask)
+
+        # Simulated masks
+        simulated = simulate_ssms_from_section_length_stats(
+            length_stats,
+            ssm_gt,
+            args.n_sim,
+            random_state=args.random_seed
+            )
+        
+        for sim in simulated:
+
+            results["sim"]["homogeneity"].append(
+                compute_homogeneity_scores(sim, ssm_gt)['global']
+            )
+
+            results["sim"]["repetition"].append(
+                compute_repetition_scores(sim, ssm_gt)['global']
+            )
+
+            results["sim"]["novelty"].append(
+                compute_novelty_scores(
+                    sim,
+                    ssm_gt,
+                    boundary_band_width=3,
+                    L=16,
+                    var=0.5,
+                    exclude=True,
+                )['global']
+            )
+
+        results["p_values"]["homogeneity"].append(float(np.mean(np.asarray(results["sim"]["homogeneity"]) >= homogeneity_gt_mask)))
+        results["p_values"]["repetition"].append(float(np.mean(np.asarray(results["sim"]["repetition"]) >= repetition_gt_mask)))
+        results["p_values"]["novelty"].append(float(np.mean(np.asarray(results["sim"]["novelty"]) >= novelty_gt_mask)))
+        
+    return results
+
+def plot_score_histograms(
+    results: dict,
+    output_file: Path,
+) -> None:
+    """
+    Plot score distributions of simulated SSMs together with the scores
+    obtained from the ground-truth SSMs.
+
+    Parameters
+    ----------
+    results : dict
+        Dictionary of the form
+
+        {
+            "gt": {
+                "homogeneity": [...],
+                "repetition": [...],
+                "novelty": [...],
+            },
+            "sim": {
+                "homogeneity": [...],
+                "repetition": [...],
+                "novelty": [...],
+            },
+        }
+
+    output_file : Path
+        Base output file. The histogram figure will be saved in the same
+        directory as
+
+            <stem>_score_histograms.png
+    """
+
+    metrics = [
+        ("homogeneity", "Homogeneity"),
+        ("repetition", "Repetition"),
+        ("novelty", "Novelty"),
+    ]
+
+    fig, axes = plt.subplots(
+        len(metrics),
+        1,
+        figsize=(8, 10),
+        constrained_layout=True,
+    )
+
+    if len(metrics) == 1:
+        axes = [axes]
+
+    for ax, (key, title) in zip(axes, metrics):
+
+        sim = np.asarray(results["sim"][key], dtype=float)
+        gt = np.asarray(results["gt"][key], dtype=float)
+        p_values = np.asarray(results["p_values"][key], dtype=float)
+
+        # Histogram of simulations
+        ax.hist(
+            sim,
+            bins=30,
+            density=True,
+            alpha=0.7,
+            label="Simulations",
+            color="tab:red"
+        )
+
+        # Ground-truth range
+        gt_min = gt.min()
+        gt_max = gt.max()
+
+        ax.axvspan(
+            gt_min,
+            gt_max,
+            alpha=0.15,
+            color="green",
+            label="GT range",
+        )
+
+        # One line per GT song
+        for i, value in enumerate(gt):
+            ax.axvline(
+                value,
+                color="black",
+                linewidth=2,
+                alpha=0.6,
+                label="GT scores" if i == 0 else None,
+            )
+
+        median_p = np.median(p_values)
+        mean_p = np.mean(p_values)
+        frac_sig = np.mean(p_values < 0.05)
+
+        ax.set_title(f"{title}")
+        ax.set_ylabel("Density")
+        ax.grid(alpha=0.3)
+
+    axes[-1].set_xlabel("Score")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, ncol=3)
+    fig.tight_layout() 
+
+    save_path = (
+        output_file.parent
+        / f"{output_file.stem}_score_histograms.png"
+    )
+
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Saved score histograms to {save_path}")
+
+    # ------------------------------------------------------------------
+    # Save p-values
+    # ------------------------------------------------------------------
+
+    csv_path = (
+        output_file.parent
+        / f"{output_file.stem}_pvalues.csv"
+    )
+
+    df = pd.DataFrame(results["p_values"])
+    df.to_csv(csv_path, index=False)
+
+    # ------------------------------------------------------------------
+    # Print summary statistics
+    # ------------------------------------------------------------------
+
+    print("\nP-value summary")
+    print("-" * 60)
+
+    for metric in ["homogeneity", "repetition", "novelty"]:
+
+        p = np.asarray(results["p_values"][metric], dtype=float)
+
+        print(
+            f"{metric:14s}"
+            f" mean={p.mean():.4f}"
+            f"  median={np.median(p):.4f}"
+            f"  p<0.05={100*np.mean(p < 0.05):5.1f}%"
+        )
+
+    print("-" * 60)
+    print(f"Saved p-values to {csv_path}")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -739,6 +958,7 @@ def main() -> None:
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED, help="Random seed for SSM simulation")
     parser.add_argument("--num-gt-examples", type=int, default=DEFAULT_NUM_GT_EXAMPLES, help="Number of ground-truth SSM examples to show")
     parser.add_argument("--n-sim", type=int, default=DEFAULT_N_SIM, help="Number of simulated SSMs to generate")
+    parser.add_argument("--view-sims", action="store_true", help="Show example ground-truth and simulated SSMs.")
     parser.add_argument("--output-file", type=Path, default=Path(__file__).resolve().parent / DEFAULT_OUTPUT_FILENAME, help="Output image file path")
     args = parser.parse_args()
 
@@ -773,11 +993,16 @@ def main() -> None:
     if not gt_ssms:
         raise ValueError("No valid ground-truth SSMs could be loaded from the discovered bundles.")
 
+    results = scores_from_ssms(ssms=gt_ssms,
+                     ssms_gt=gt_ssms,
+                     length_stats=length_stats,
+                     args=args)
+    plot_score_histograms(results, args.output_file)
 
-    args.output_file.parent.mkdir(parents=True, exist_ok=True)
-    plot_gt_and_simulated_ssms(gt_ssms, length_stats, args, file_names=file_names)
-    print(f"Saved combined SSM example figure to {args.output_file}")
-
+    if args.view_sims:
+        args.output_file.parent.mkdir(parents=True, exist_ok=True)
+        plot_gt_and_simulated_ssms(gt_ssms[:MAX_N_SIM_SHOW], length_stats, args, file_names=file_names[:MAX_N_SIM_SHOW])
+        print(f"Saved combined SSM example figure to {args.output_file}")
 
 if __name__ == "__main__":
     main()
