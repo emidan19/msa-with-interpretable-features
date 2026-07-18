@@ -233,11 +233,13 @@ def _sample_section_widths(
 
 
 def _sample_repetition_pairs(
-    n_sections: int,
+    widths: list[int],
     mean_ratio: float,
     std_ratio: float,
     rng: np.random.Generator,
 ) -> list[tuple[int, int]]:
+
+    n_sections = len(widths)
 
     if n_sections < 2:
         return []
@@ -255,6 +257,7 @@ def _sample_repetition_pairs(
         (i, j)
         for i in range(n_sections)
         for j in range(i + 2, n_sections) # Filter to not be consecutive repetitions
+        if max(widths[i], widths[j]) <= 4 * min(widths[i], widths[j]) # Similar shapes (repetitions should be similar in size)
     ]
 
     rng.shuffle(candidates)
@@ -304,7 +307,7 @@ def simulate_ssms_from_section_length_stats(
             end = int(section_starts[section_idx + 1])
             ssm[start:end, start:end] = 1
 
-        pairs = _sample_repetition_pairs(len(widths), mean_ratio, std_ratio, rng)
+        pairs = _sample_repetition_pairs(widths, mean_ratio, std_ratio, rng)
         for i, j in pairs:
             start_i = int(section_starts[i])
             end_i = int(section_starts[i + 1])
@@ -749,6 +752,8 @@ def main() -> None:
         )
 
     length_stats = compute_section_length_stats(npz_paths)
+
+    print(f'Stats from labeled section data={length_stats}')
 
     gt_ssms: list[np.ndarray] = []
     file_names: list[str] = []
