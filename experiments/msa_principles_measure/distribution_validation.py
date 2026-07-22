@@ -457,6 +457,88 @@ def build_comparison_table(
     return pd.DataFrame(rows)
 
 
+def build_feature_ssm_validation_sets(
+    npz_paths: list[Path],
+    similarity_type: str,
+    gamma: float | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, np.ndarray]]:
+    feature_sets: dict[str, dict[str, Any]] = {}
+    song_gt_ssms: dict[str, np.ndarray] = {}
+
+    for npz_path in npz_paths:
+        bundle = load_feature_bundle(npz_path)
+        try:
+            ssm_gt = _build_gt_matrix(bundle)
+        except KeyError:
+            continue
+
+        song_name = npz_path.stem.replace("_features", "")
+        if song_name not in song_gt_ssms:
+            song_gt_ssms[song_name] = ssm_gt
+
+        for feature_name in list_feature_names(bundle):
+            feature_matrix = np.asarray(bundle[f"beat_{feature_name}"], dtype=float)
+            try:
+                ssm = np.abs(build_ssm(feature_matrix, similarity_type=similarity_type, gamma=gamma))
+            except Exception:
+                continue
+
+            if ssm.shape != ssm_gt.shape:
+                continue
+
+            feature_data = feature_sets.setdefault(
+                feature_name,
+                {
+                    "ssms": [],
+                    "song_names": [],
+                },
+            )
+            feature_data["ssms"].append(ssm)
+            feature_data["song_names"].append(song_name)
+
+    return feature_sets, song_gt_ssms
+
+
+def run_feature_validation(
+    args: argparse.Namespace,
+    npz_paths: list[Path],
+    length_stats: dict[str, Any],
+) -> None:
+    if args.similarity_type is None:
+        raise ValueError("Similarity type is required for feature-based SSM validation.")
+
+    output_dir = args.output_file.parent / f"validation_{args.similarity_type}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    feature_sets, song_gt_ssms = build_feature_ssm_validation_sets(
+        npz_paths,
+        args.similarity_type,
+        gamma=getattr(args, "gamma", None),
+    )
+
+    if not feature_sets:
+        raise ValueError(
+            f"No valid feature-based SSMs could be constructed using similarity type '{args.similarity_type}'."
+        )
+
+    for feature_name, feature_data in sorted(feature_sets.items()):
+        if not feature_data["ssms"]:
+            continue
+
+        gt_ssms = [song_gt_ssms[song_name] for song_name in feature_data["song_names"]]
+        results = scores_from_ssms(
+            ssms=feature_data["ssms"],
+            ssms_gt=gt_ssms,
+            length_stats=length_stats,
+            args=args,
+        )
+
+        file_base = output_dir / f"ssm_simulation_{feature_name}"
+        plot_score_histograms(results, file_base)
+        save_scores(results, file_base)
+        print(f"Saved validation outputs for feature '{feature_name}' to {output_dir}")
+
+
 def save_global_comparison_plots(results_df: pd.DataFrame, output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     saved_paths: list[Path] = []
@@ -802,6 +884,39 @@ def scores_from_ssms(ssms: np.ndarray,
         
     return results
 
+def save_scores(
+    results: dict,
+    output_file: Path,
+) -> None:
+    
+    # Save ground truth scores
+    gt_scores = {
+        "homogeneity": results["gt"]["homogeneity"],
+        "repetition": results["gt"]["repetition"],
+        "novelty": results["gt"]["novelty"],
+    }
+    gt_save_path = (
+        output_file.parent
+        / f"{output_file.stem}_gt_scores.csv"
+    )
+    gt_df = pd.DataFrame(gt_scores)
+    gt_df.to_csv(gt_save_path, index=False)
+
+    # Save simulated scores
+    sim_scores = {
+        "homogeneity": results["sim"]["homogeneity"],
+        "repetition": results["sim"]["repetition"],
+        "novelty": results["sim"]["novelty"],
+    }
+    sim_save_path = (
+        output_file.parent
+        / f"{output_file.stem}_sim_scores.csv"
+    )
+    sim_df = pd.DataFrame(sim_scores)
+    sim_df.to_csv(sim_save_path, index=False)
+
+    print(f"Saved GT and simulated scores to {gt_save_path} and {sim_save_path}.")
+
 def plot_score_histograms(
     results: dict,
     output_file: Path,
@@ -889,10 +1004,6 @@ def plot_score_histograms(
                 label="GT scores" if i == 0 else None,
             )
 
-        median_p = np.median(p_values)
-        mean_p = np.mean(p_values)
-        frac_sig = np.mean(p_values < 0.05)
-
         ax.set_title(f"{title}")
         ax.set_ylabel("Density")
         ax.grid(alpha=0.3)
@@ -953,6 +1064,7 @@ def main() -> None:
     parser.add_argument("--num-gt-examples", type=int, default=DEFAULT_NUM_GT_EXAMPLES, help="Number of ground-truth SSM examples to show")
     parser.add_argument("--n-sim", type=int, default=DEFAULT_N_SIM, help="Number of simulated SSMs to generate")
     parser.add_argument("--view-sims", action="store_true", help="Show example ground-truth and simulated SSMs.")
+    parser.add_argument("--similarity-type", choices=SIMILARITY_TYPES, default=None, help="Similarity type to use when constructing feature SSMs for validation.")
     parser.add_argument("--output-file", type=Path, default=Path(__file__).resolve().parent / DEFAULT_OUTPUT_FILENAME, help="Output image file path")
     args = parser.parse_args()
 
@@ -984,14 +1096,22 @@ def main() -> None:
         except KeyError:
             continue
 
+    if args.similarity_type is not None:
+        args.output_file.parent.mkdir(parents=True, exist_ok=True)
+        run_feature_validation(args, npz_paths, length_stats)
+        return
+
     if not gt_ssms:
         raise ValueError("No valid ground-truth SSMs could be loaded from the discovered bundles.")
 
-    results = scores_from_ssms(ssms=gt_ssms,
-                     ssms_gt=gt_ssms,
-                     length_stats=length_stats,
-                     args=args)
+    results = scores_from_ssms(
+        ssms=gt_ssms,
+        ssms_gt=gt_ssms,
+        length_stats=length_stats,
+        args=args,
+    )
     plot_score_histograms(results, args.output_file)
+
 
     if args.view_sims:
         args.output_file.parent.mkdir(parents=True, exist_ok=True)
