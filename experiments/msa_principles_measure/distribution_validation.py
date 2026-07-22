@@ -764,9 +764,9 @@ def scores_from_ssms(ssms: np.ndarray,
 
     
 
-        homogeneity_gt_mask = compute_homogeneity_scores(ssm_gt, ssm_gt)['global']
-        repetition_gt_mask = compute_repetition_scores(ssm_gt, ssm_gt)['global']
-        novelty_gt_mask = compute_novelty_scores(ssm_gt,ssm_gt,boundary_band_width=3,L=16,var=0.5,exclude=True)['global']
+        homogeneity_gt_mask = compute_homogeneity_scores(ssm, ssm_gt)['global']
+        repetition_gt_mask = compute_repetition_scores(ssm, ssm_gt)['global']
+        novelty_gt_mask = compute_novelty_scores(ssm,ssm_gt,boundary_band_width=3,L=16,var=0.5,exclude=True)['global']
 
         # Ground truth mask
         results["gt"]["homogeneity"].append(homogeneity_gt_mask)
@@ -784,22 +784,16 @@ def scores_from_ssms(ssms: np.ndarray,
         for sim in simulated:
 
             results["sim"]["homogeneity"].append(
-                compute_homogeneity_scores(sim, ssm_gt)['global']
+                compute_homogeneity_scores(ssm, sim)['global']
             )
 
             results["sim"]["repetition"].append(
-                compute_repetition_scores(sim, ssm_gt)['global']
+                compute_repetition_scores(ssm, sim)['global']
             )
 
             results["sim"]["novelty"].append(
                 compute_novelty_scores(
-                    sim,
-                    ssm_gt,
-                    boundary_band_width=3,
-                    L=16,
-                    var=0.5,
-                    exclude=True,
-                )['global']
+                    ssm, sim, boundary_band_width=3, L=16, var=0.5, exclude=True)['global']
             )
 
         results["p_values"]["homogeneity"].append(float(np.mean(np.asarray(results["sim"]["homogeneity"]) >= homogeneity_gt_mask)))
