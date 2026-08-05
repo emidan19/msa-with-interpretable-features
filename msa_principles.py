@@ -10,6 +10,7 @@ musical section or to a structural repetition, and 0 otherwise.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from typing import Any
 
@@ -101,18 +102,76 @@ def label_ssm_regions(ssm_gt: np.ndarray) -> tuple[np.ndarray, int]:
     return labels, int(num)
 
 
-def extract_ssm_regions(ssm_gt: np.ndarray) -> tuple[list[SsmRegion], list[SsmRegion]]:
+def _extract_ssm_regions_from_segment_ids(matrix: np.ndarray, segment_ids: np.ndarray) -> tuple[list[SsmRegion], list[SsmRegion]]:
+    """Extract section/repetition regions using known segment instance ids.
+
+    Unlike connected-component labeling, this disambiguates two temporally
+    adjacent segments that share the same label (e.g. consecutive `verse`
+    sections): since each annotated segment has a distinct id, the section
+    for id ``s`` is exactly the block where both row and column belong to
+    ``s``, and a repetition is any off-diagonal block between two different
+    ids that is marked 1 in the SSM_GT.
+    """
+
+    ids = np.asarray(segment_ids)
+    if ids.shape[0] != matrix.shape[0]:
+        raise ValueError(f"segment_ids length {ids.shape[0]} does not match SSM_GT size {matrix.shape[0]}.")
+
+    positive = matrix.astype(bool)
+    unique_ids = sorted(int(value) for value in np.unique(ids) if value >= 0)
+
+    sections: list[SsmRegion] = []
+    repetitions: list[SsmRegion] = []
+    next_label = 1
+
+    for segment_id in unique_ids:
+        row_mask = ids == segment_id
+        region_mask = row_mask[:, None] & row_mask[None, :] & positive
+        if not np.any(region_mask):
+            continue
+        pixels = np.column_stack(np.nonzero(region_mask))
+        sections.append(SsmRegion(label=next_label, region_type="section", pixels=pixels))
+        next_label += 1
+
+    for row_id, col_id in itertools.permutations(unique_ids, 2):
+        region_mask = (ids == row_id)[:, None] & (ids == col_id)[None, :] & positive
+        if not np.any(region_mask):
+            continue
+        pixels = np.column_stack(np.nonzero(region_mask))
+        repetitions.append(SsmRegion(label=next_label, region_type="repetition", pixels=pixels))
+        next_label += 1
+
+    return sections, repetitions
+
+
+def extract_ssm_regions(ssm_gt: np.ndarray, segment_ids: np.ndarray | None = None) -> tuple[list[SsmRegion], list[SsmRegion]]:
     """Extract section and repetition regions from a binary SSM_GT.
+
+    Parameters
+    ----------
+    segment_ids:
+        Optional per-frame annotated segment instance id (distinct even for
+        temporally adjacent segments sharing the same label). When provided,
+        regions are derived directly from segment identity instead of pixel
+        connectivity, which correctly separates a section from an adjacent
+        repetition even when they touch with no zero-valued gap between
+        them (a case plain connected-component labeling cannot resolve).
 
     Returns
     -------
     sections:
-        Connected components containing at least one main-diagonal pixel.
+        Connected components containing at least one main-diagonal pixel
+        (or, with `segment_ids`, the exact block for each segment id).
     repetitions:
-        Connected components containing no main-diagonal pixels.
+        Connected components containing no main-diagonal pixels (or, with
+        `segment_ids`, the off-diagonal blocks between different segment ids).
     """
 
     matrix = _validate_square_binary_ssm_gt(ssm_gt)
+
+    if segment_ids is not None:
+        return _extract_ssm_regions_from_segment_ids(matrix, segment_ids)
+
     labels, num_regions = label_ssm_regions(matrix)
     n = matrix.shape[0]
     diagonal_mask = np.eye(n, dtype=bool)
@@ -192,7 +251,7 @@ def _region_contrast_score(matrix: np.ndarray, pixels: np.ndarray, background_ma
     return (region_energy - background_energy) / (region_energy + background_energy + eps)
 
 
-def compute_homogeneity_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float = 1e-12) -> dict[str, Any]:
+def compute_homogeneity_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float = 1e-12, segment_ids: np.ndarray | None = None) -> dict[str, Any]:
     """Compute section-wise contrast scores against a local background.
 
     The local background is the subset of the complement of the structural
@@ -205,7 +264,7 @@ def compute_homogeneity_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float =
     if matrix.shape != gt.shape:
         raise ValueError("SSM and SSM_GT must have the same shape.")
 
-    sections, _ = extract_ssm_regions(gt)
+    sections, _ = extract_ssm_regions(gt, segment_ids=segment_ids)
     background_mask = ~gt.astype(bool)
     scores = []
     for section in sections:
@@ -220,7 +279,7 @@ def compute_homogeneity_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float =
     }
 
 
-def compute_repetition_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float = 1e-12) -> dict[str, Any]:
+def compute_repetition_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float = 1e-12, segment_ids: np.ndarray | None = None) -> dict[str, Any]:
     """Compute repetition-wise contrast scores against a local background."""
 
     matrix = _validate_square_ssm(ssm)
@@ -228,7 +287,7 @@ def compute_repetition_scores(ssm: np.ndarray, ssm_gt: np.ndarray, eps: float = 
     if matrix.shape != gt.shape:
         raise ValueError("SSM and SSM_GT must have the same shape.")
 
-    _, repetitions = extract_ssm_regions(gt)
+    _, repetitions = extract_ssm_regions(gt, segment_ids=segment_ids)
     background_mask = ~gt.astype(bool)
     scores = []
     for repetition in repetitions:
@@ -311,7 +370,7 @@ def compute_novelty_ssm(
     return novelty
 
 
-def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8) -> list[SsmRegion]:
+def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8, segment_ids: np.ndarray | None = None) -> list[SsmRegion]:
     """Build boundary regions between adjacent sections using a diagonal band.
 
     The band width controls how wide the diagonal neighborhood around each
@@ -319,7 +378,7 @@ def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8) -> list[Ssm
     """
 
     gt = _validate_square_binary_ssm_gt(ssm_gt)
-    sections, _ = extract_ssm_regions(gt)
+    sections, _ = extract_ssm_regions(gt, segment_ids=segment_ids)
     if len(sections) < 2:
         return []
 
@@ -348,7 +407,7 @@ def _build_boundary_regions(ssm_gt: np.ndarray, band_width: int = 8) -> list[Ssm
     return boundaries
 
 
-def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list[tuple[SsmRegion, SsmRegion, SsmRegion]]:
+def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8, segment_ids: np.ndarray | None = None) -> list[tuple[SsmRegion, SsmRegion, SsmRegion]]:
     """Build transition tuples for adjacent section boundaries.
 
     Each transition contains a boundary region and the boundary-facing half of
@@ -356,7 +415,7 @@ def _build_boundary_transitions(ssm_gt: np.ndarray, band_width: int = 8) -> list
     """
 
     gt = _validate_square_binary_ssm_gt(ssm_gt)
-    sections, _ = extract_ssm_regions(gt)
+    sections, _ = extract_ssm_regions(gt, segment_ids=segment_ids)
     if len(sections) < 2:
         return []
 
@@ -429,6 +488,7 @@ def compute_novelty_scores(
     var: float = 0.5,
     normalize: bool = True,
     exclude: bool = False,
+    segment_ids: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Compute novelty contrast scores for section transitions.
 
@@ -448,7 +508,7 @@ def compute_novelty_scores(
         raise ValueError("SSM and SSM_GT must have the same shape.")
 
     novelty_response = compute_novelty_ssm(matrix, kernel=kernel, L=L, var=var, normalize=normalize, exclude=exclude)
-    transitions = _build_boundary_transitions(gt, band_width=boundary_band_width)
+    transitions = _build_boundary_transitions(gt, band_width=boundary_band_width, segment_ids=segment_ids)
     scores = []
     boundary_means = []
     left_section_means = []
@@ -489,7 +549,14 @@ def compute_novelty_scores(
     }
 
 
-def ssm_quality_metrics(ssm: np.ndarray, ssm_gt: np.ndarray, *, eps: float = 1e-12, boundary_band_width: int = 4) -> dict[str, Any]:
+def ssm_quality_metrics(
+    ssm: np.ndarray,
+    ssm_gt: np.ndarray,
+    *,
+    eps: float = 1e-12,
+    boundary_band_width: int = 4,
+    segment_ids: np.ndarray | None = None,
+) -> dict[str, Any]:
     """Compute quality metrics for SSM against a binary structural SSM_GT."""
 
     matrix = _validate_square_ssm(ssm)
@@ -497,7 +564,7 @@ def ssm_quality_metrics(ssm: np.ndarray, ssm_gt: np.ndarray, *, eps: float = 1e-
     if matrix.shape != gt.shape:
         raise ValueError("SSM and SSM_GT must have the same shape.")
 
-    sections, repetitions = extract_ssm_regions(gt)
+    sections, repetitions = extract_ssm_regions(gt, segment_ids=segment_ids)
     positive_mask = gt.astype(bool)
     negative_mask = ~positive_mask
 
@@ -520,9 +587,9 @@ def ssm_quality_metrics(ssm: np.ndarray, ssm_gt: np.ndarray, *, eps: float = 1e-
     if not np.isnan(section_mean) and not np.isnan(repetition_mean):
         global_quality = 0.5 * (section_mean + repetition_mean) - background_mean
 
-    homogeneity = compute_homogeneity_scores(matrix, gt, eps=eps)
-    repetition = compute_repetition_scores(matrix, gt, eps=eps)
-    novelty = compute_novelty_scores(matrix, gt, eps=eps, boundary_band_width=boundary_band_width)
+    homogeneity = compute_homogeneity_scores(matrix, gt, eps=eps, segment_ids=segment_ids)
+    repetition = compute_repetition_scores(matrix, gt, eps=eps, segment_ids=segment_ids)
+    novelty = compute_novelty_scores(matrix, gt, eps=eps, boundary_band_width=boundary_band_width, segment_ids=segment_ids)
 
     return {
         "section_mean": section_mean,

@@ -16,7 +16,7 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from data_loading import load_runtime_config
-from feature_types import build_ssm
+from feature_types import build_section_segment_ids, build_ssm
 from msa_principles import (
     compute_homogeneity_scores,
     compute_novelty_scores,
@@ -96,8 +96,23 @@ def _build_gt_matrix(bundle: dict[str, Any]) -> np.ndarray:
     return (np.asarray(bundle["ssm_sections"]) > 0).astype(np.uint8)
 
 
-def _build_region_masks(ssm_gt: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    sections, repetitions = extract_ssm_regions(ssm_gt)
+def _build_segment_ids(bundle: dict[str, Any]) -> np.ndarray | None:
+    """Recover per-frame segment instance ids from the raw annotation, if saved.
+
+    `ssm_sections` only encodes label equality, so two temporally adjacent
+    segments sharing the same normalized label (very common: repeated verse
+    or chorus) are pixel-indistinguishable from a single larger section. The
+    raw `sections` list (distinct per annotated segment) plus `beat_boundaries`
+    lets us recover that distinction; see `extract_ssm_regions`'s `segment_ids`.
+    """
+    if "sections" not in bundle or "beat_boundaries" not in bundle:
+        return None
+    sections = [(float(start), float(end), str(label)) for start, end, label in bundle["sections"]]
+    return build_section_segment_ids(sections, np.asarray(bundle["beat_boundaries"]))
+
+
+def _build_region_masks(ssm_gt: np.ndarray, segment_ids: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    sections, repetitions = extract_ssm_regions(ssm_gt, segment_ids=segment_ids)
     section_mask = np.zeros_like(ssm_gt, dtype=bool)
     repetition_mask = np.zeros_like(ssm_gt, dtype=bool)
     for region in sections:
@@ -114,6 +129,7 @@ def evaluate_feature_similarity(
     ssm_gt: np.ndarray,
     similarity_type: str = "cosine",
     gamma: float | None = None,
+    segment_ids: np.ndarray | None = None,
 ) -> dict[str, Any]:
     beat_key = f"beat_{feature_name}"
     if beat_key not in bundle:
@@ -129,11 +145,11 @@ def evaluate_feature_similarity(
             f"SSM shape mismatch for feature {feature_name!r}: got {ssm.shape}, expected {ssm_gt.shape}."
         )
 
-    homogeneity = compute_homogeneity_scores(ssm, ssm_gt)
-    repetition = compute_repetition_scores(ssm, ssm_gt)
-    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True)
+    homogeneity = compute_homogeneity_scores(ssm, ssm_gt, segment_ids=segment_ids)
+    repetition = compute_repetition_scores(ssm, ssm_gt, segment_ids=segment_ids)
+    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True, segment_ids=segment_ids)
 
-    section_mask, repetition_mask, background_mask = _build_region_masks(ssm_gt)
+    section_mask, repetition_mask, background_mask = _build_region_masks(ssm_gt, segment_ids=segment_ids)
     section_mean = float(np.mean(ssm[section_mask])) if np.any(section_mask) else float("nan")
     repetition_mean = float(np.mean(ssm[repetition_mask])) if np.any(repetition_mask) else float("nan")
     background_mean = float(np.mean(ssm[background_mask])) if np.any(background_mask) else float("nan")
@@ -169,6 +185,7 @@ def build_comparison_table(
     for npz_path in npz_paths:
         bundle = load_feature_bundle(npz_path)
         ssm_gt = _build_gt_matrix(bundle)
+        segment_ids = _build_segment_ids(bundle)
         song_name = npz_path.stem.replace("_features", "")
         for feature_name in list_feature_names(bundle):
             for similarity_type in similarity_types:
@@ -178,6 +195,7 @@ def build_comparison_table(
                     ssm_gt,
                     similarity_type=similarity_type,
                     gamma=gamma,
+                    segment_ids=segment_ids,
                 )
                 rows.append(
                     {
@@ -310,7 +328,8 @@ def save_all_ssm_images(npz_paths: list[Path], output_dir: Path, similarity_type
     for npz_path in npz_paths:
         bundle = load_feature_bundle(npz_path)
         ssm_gt = _build_gt_matrix(bundle)
-        sections, repetitions = extract_ssm_regions(ssm_gt)
+        segment_ids = _build_segment_ids(bundle)
+        sections, repetitions = extract_ssm_regions(ssm_gt, segment_ids=segment_ids)
         song_name = npz_path.stem.replace("_features", "")
         target_song_dir = output_dir / "SSMs" / song_name
         target_song_dir.mkdir(parents=True, exist_ok=True)
@@ -324,7 +343,7 @@ def save_all_ssm_images(npz_paths: list[Path], output_dir: Path, similarity_type
                 except Exception:
                     continue
 
-                novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True)
+                novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True, segment_ids=segment_ids)
                 novelty_response = novelty.get("novelty_response")
 
                 # Plot SSM (with boxes) and novelty response side-by-side
@@ -368,7 +387,8 @@ def save_combined_ssm_svgs(npz_paths: list[Path], output_dir: Path, similarity_t
     for npz_path in npz_paths:
         bundle = load_feature_bundle(npz_path)
         ssm_gt = _build_gt_matrix(bundle)
-        sections, repetitions = extract_ssm_regions(ssm_gt)
+        segment_ids = _build_segment_ids(bundle)
+        sections, repetitions = extract_ssm_regions(ssm_gt, segment_ids=segment_ids)
         song_name = npz_path.stem.replace("_features", "")
         target_song_dir = output_dir / "SSMs"
         target_song_dir.mkdir(parents=True, exist_ok=True)
@@ -419,7 +439,7 @@ def save_combined_ssm_svgs(npz_paths: list[Path], output_dir: Path, similarity_t
                 ssm_ax.set_xticks([])
                 ssm_ax.set_yticks([])
 
-                novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True)
+                novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=3, L=16, var=0.5, exclude=True, segment_ids=segment_ids)
                 novelty_response = novelty.get("novelty_response")
                 if novelty_response is not None:
                     novelty_ax.plot(novelty_response, color="tab:purple", linewidth=1.2)
