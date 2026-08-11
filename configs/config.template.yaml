@@ -97,7 +97,7 @@ feature_config:
   # - Classical audio features -
   #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density
   # - SSL models -
-  #   muq, matpac, musicfm
+  #   muq, matpac, musicfm, repcl
   # - Sections (labels) -  
   #   sections
 
@@ -109,6 +109,7 @@ feature_config:
     - sections
     - muq
     - musicfm
+    - repcl
 
   # Preview rendering
   # Available options:
@@ -121,6 +122,7 @@ feature_config:
     - sections
     - muq
     - musicfm
+    - repcl
 
 
   # Output preview image formats
@@ -130,7 +132,7 @@ feature_config:
 
   # SSM similarity selection
   # Supported values: cosine, autocorrelation, covariance, rbf, centered_rbf
-  ssm_similarity_type: cosine
+  ssm_similarity_type: rbf
   ssm_similarity_gamma: null
 
   # STM parameters

@@ -315,8 +315,13 @@ def extract_orthogonal_proxy_features(
     }
     return features, diagnostics
 
-def extract_ssl_features(audio_path: str, cfg: FeatureConfig, feature_names: set[str]) -> dict[str, np.ndarray]:
-    requested = feature_names & {"musicfm", "muq", "matpac"}
+def extract_ssl_features(
+    audio_path: str,
+    cfg: FeatureConfig,
+    feature_names: set[str],
+    beat_boundaries: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    requested = feature_names & {"musicfm", "muq", "matpac", "repcl"}
     if not requested:
         return {}
 
@@ -381,7 +386,67 @@ def extract_ssl_features(audio_path: str, cfg: FeatureConfig, feature_names: set
             emb, _layer_results = matpac(wav_16k)
             outputs["matpac"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
 
+        if "repcl" in requested:
+            outputs["repcl"] = _extract_repcl_embeddings(
+                _resample_if_needed, cfg, device, beat_boundaries
+            )
+
     return outputs
+
+
+def _extract_repcl_embeddings(
+    _resample_if_needed,
+    cfg: FeatureConfig,
+    device,
+    beat_boundaries: np.ndarray | None,
+) -> np.ndarray:
+    """One 128-d repCL (Triplet_Mining) embedding per beat interval, centered on each interval midpoint."""
+    import os
+    import sys
+
+    import torch
+
+    if beat_boundaries is None or len(beat_boundaries) < 2:
+        return np.zeros((128, 0), dtype=np.float32)
+
+    tm_root = cfg.triplet_mining_root
+    if str(tm_root) not in sys.path:
+        sys.path.insert(0, str(tm_root))
+    from configuration import config as repcl_config
+    from models import EmbedNet
+
+    repcl_sr = repcl_config.sample_rate
+    repcl_hop = repcl_config.hop_length
+    n_mels = repcl_config.mel.n_mels
+    fmax = repcl_config.mel.fmax
+    n_embedding = repcl_config.embedding.n_embedding
+
+    wav_repcl = _resample_if_needed(repcl_sr).to(device)
+    y_np = wav_repcl.squeeze(0).detach().cpu().numpy().astype(np.float32)
+
+    mel = librosa.feature.melspectrogram(
+        y=y_np, sr=repcl_sr, hop_length=repcl_hop, n_mels=n_mels, fmax=fmax
+    )
+    mel = np.log1p(np.abs(mel) ** 2).astype(np.float32)
+    mel = (mel - np.min(mel)) / max(np.max(mel) - np.min(mel), 1e-6)
+
+    pad_width = n_embedding // 2
+    mel_padded = np.pad(mel, pad_width=((0, 0), (pad_width, pad_width)), mode="edge")
+
+    interval_centers_s = (beat_boundaries[:-1] + beat_boundaries[1:]) / 2.0
+    center_frames = librosa.time_to_frames(interval_centers_s, sr=repcl_sr, hop_length=repcl_hop)
+    center_frames = np.clip(center_frames, 0, mel.shape[1] - 1)
+
+    windows = np.stack([mel_padded[:, i : i + n_embedding] for i in center_frames], axis=0)
+    windows_t = torch.tensor(windows[:, None, :, :], dtype=torch.float32, device=device)
+
+    embedding_net = EmbedNet(repcl_config).to(device)
+    checkpoint = torch.load(os.fspath(cfg.repcl_checkpoint_path), map_location=device)
+    embedding_net.load_state_dict(checkpoint["state_dict"])
+    embedding_net.eval()
+
+    emb = embedding_net(windows_t)
+    return emb.detach().cpu().numpy().T.astype(np.float32)
 
 def correct_octave_jumps(midi: np.ndarray, valid: np.ndarray) -> np.ndarray:
     corrected = midi.copy()

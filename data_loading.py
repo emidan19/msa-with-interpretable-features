@@ -78,6 +78,16 @@ class FeatureConfig:
     )
     muq_model_name: str = "OpenMuQ/MuQ-large-msd-iter"
     ssl_device: str = "cpu"
+    triplet_mining_root: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[1] / "Triplet_Mining"
+    )
+    repcl_checkpoint_path: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[1]
+        / "Triplet_Mining"
+        / "results"
+        / "models"
+        / "model_20k.pt"
+    )
 
 
 FEATURE_NAME_ORDER = (
@@ -93,6 +103,7 @@ FEATURE_NAME_ORDER = (
     "musicfm",
     "muq",
     "matpac",
+    "repcl",
     "sections",
     "fused",
 )
@@ -194,6 +205,8 @@ def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
         "matpac_checkpoint_path",
         "musicfm_stat_path",
         "musicfm_model_path",
+        "triplet_mining_root",
+        "repcl_checkpoint_path",
     ):
         if path_key in payload and payload[path_key] is not None:
             payload[path_key] = Path(payload[path_key])

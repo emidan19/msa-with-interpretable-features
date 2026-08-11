@@ -24,6 +24,7 @@ SSM_FEATURE_TO_KEY = {
     "musicfm": "ssm_musicfm",
     "muq": "ssm_muq",
     "matpac": "ssm_matpac",
+    "repcl": "ssm_repcl",
     "fused": "ssm_fused",
 }
 
