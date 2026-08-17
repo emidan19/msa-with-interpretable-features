@@ -77,19 +77,21 @@ class FeatureConfig:
         / "pretrained_msd.pt"
     )
     muq_model_name: str = "OpenMuQ/MuQ-large-msd-iter"
-    ssl_device: str = "cpu"
+
     triplet_mining_root: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[1] / "Triplet_Mining"
+        default_factory=lambda: Path(__file__).resolve().parents[2] / "SSL_models" / "Triplet_Mining"
     )
     repcl_checkpoint_path: Path = field(
-        default_factory=lambda: Path(__file__).resolve().parents[1]
+        default_factory=lambda: Path(__file__).resolve().parents[2]
+        / "SSL_models"
         / "Triplet_Mining"
         / "results"
         / "models"
         / "model_20k.pt"
     )
 
-
+    ssl_device: str = "cpu"
+    
 FEATURE_NAME_ORDER = (
     "stm",
     "mfcc",
