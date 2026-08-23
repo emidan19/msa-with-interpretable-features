@@ -112,6 +112,33 @@ def build_section_ssm(
     return np.where(assigned, valid, False).astype(np.float32)
 
 
+def build_section_segment_ids(
+    sections: list[tuple[float, float, str]],
+    beat_boundaries: np.ndarray,
+) -> np.ndarray:
+    """Per-interval segment instance id, companion to :func:`build_section_ssm`.
+
+    Whereas ``build_section_ssm`` buckets intervals by *label* id (so two
+    temporally adjacent segments with the same normalized label collapse
+    into one indistinguishable block), this assigns a unique id per
+    annotated ``(start, end, label)`` tuple, so adjacent same-label segments
+    remain distinguishable downstream (e.g. for correct section/repetition
+    region extraction in ``msa_principles.py``).
+    """
+    n_intervals = max(0, len(beat_boundaries) - 1)
+    if not sections or n_intervals == 0:
+        return np.zeros(0, dtype=np.int32)
+
+    interval_segment_ids = np.full(n_intervals, -1, dtype=np.int32)
+    interval_centers = (beat_boundaries[:-1] + beat_boundaries[1:]) / 2.0
+
+    for segment_index, (start, end, _label) in enumerate(sections):
+        mask = (interval_centers >= start) & (interval_centers < end)
+        interval_segment_ids[mask] = segment_index
+
+    return interval_segment_ids
+
+
 def aggregate_by_intervals(features: np.ndarray, frame_times: np.ndarray, boundaries: np.ndarray) -> np.ndarray:
     features = safe_nan_to_num(features)
     out = np.zeros((features.shape[0], max(0, len(boundaries) - 1)), dtype=np.float32)

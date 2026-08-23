@@ -40,6 +40,7 @@ feature_outputs/
 experiments/**
 !experiments/msa_principles_measure/
 !/experiments/msa_principles_measure/by_similarity_function.py
+!/experiments/msa_principles_measure/distribution_validation.py
 
 # Installer logs
 pip-log.txt

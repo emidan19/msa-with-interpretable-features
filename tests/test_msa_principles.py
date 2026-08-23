@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # assert SPEC.loader is not None
 # SPEC.loader.exec_module(by_similarity_function)
 
+from feature_types import build_section_segment_ids
 from msa_principles import (
     compute_homogeneity_scores,
     compute_novelty_scores,
@@ -66,6 +67,82 @@ def test_extract_ssm_regions_classifies_sections():
 
     assert len(sections) == 2
     assert len(repetitions) == 0
+
+
+def _build_adjacent_same_label_ssm_gt() -> tuple[np.ndarray, np.ndarray]:
+    """Two temporally adjacent sections with the same label, plus an unrelated third section.
+
+    Without segment identity, the first two sections and their repetition
+    block are pixel-indistinguishable from one larger section (no zero-valued
+    gap separates them) — this reproduces a real, common case in RWC-Pop
+    annotations (e.g. `verse` followed immediately by another `verse`).
+    """
+    n = 15
+    ssm_gt = np.zeros((n, n), dtype=int)
+    ssm_gt[0:5, 0:5] = 1
+    ssm_gt[5:10, 5:10] = 1
+    ssm_gt[0:5, 5:10] = 1
+    ssm_gt[5:10, 0:5] = 1
+    ssm_gt[10:15, 10:15] = 1
+    segment_ids = np.array([0] * 5 + [1] * 5 + [2] * 5, dtype=int)
+    return ssm_gt, segment_ids
+
+
+def test_extract_ssm_regions_merges_adjacent_same_label_sections_without_segment_ids():
+    ssm_gt, _ = _build_adjacent_same_label_ssm_gt()
+
+    sections, repetitions = extract_ssm_regions(ssm_gt)
+
+    # Known limitation of connected-component labeling: the two adjacent
+    # same-label sections and their repetition collapse into one region.
+    assert len(sections) == 2
+    assert len(repetitions) == 0
+
+
+def test_extract_ssm_regions_separates_adjacent_same_label_sections_with_segment_ids():
+    ssm_gt, segment_ids = _build_adjacent_same_label_ssm_gt()
+
+    sections, repetitions = extract_ssm_regions(ssm_gt, segment_ids=segment_ids)
+
+    assert len(sections) == 3
+    assert len(repetitions) == 2
+    assert sorted(section.size for section in sections) == [25, 25, 25]
+    assert sorted(repetition.size for repetition in repetitions) == [25, 25]
+
+
+def test_contrast_scores_with_segment_ids_recover_the_missing_repetition():
+    ssm_gt, segment_ids = _build_adjacent_same_label_ssm_gt()
+    rng = np.random.default_rng(0)
+    ssm = rng.uniform(0.0, 1.0, size=ssm_gt.shape)
+    ssm = 0.5 * (ssm + ssm.T)
+    np.fill_diagonal(ssm, 1.0)
+
+    homogeneity = compute_homogeneity_scores(ssm, ssm_gt, segment_ids=segment_ids)
+    repetition = compute_repetition_scores(ssm, ssm_gt, segment_ids=segment_ids)
+    novelty = compute_novelty_scores(ssm, ssm_gt, boundary_band_width=1, L=3, segment_ids=segment_ids)
+
+    assert len(homogeneity["per_section"]) == 3
+    assert len(repetition["per_repetition"]) == 2
+    assert len(novelty["per_transition"]) == 2
+    assert np.isfinite(homogeneity["global"])
+    assert np.isfinite(repetition["global"])
+    assert np.isfinite(novelty["global"])
+
+    # Without segment_ids, the repetition is silently lost (nan global score).
+    repetition_without_ids = compute_repetition_scores(ssm, ssm_gt)
+    assert len(repetition_without_ids["per_repetition"]) == 0
+    assert np.isnan(repetition_without_ids["global"])
+
+
+def test_build_section_segment_ids_distinguishes_adjacent_same_label_segments():
+    sections = [(0.0, 5.0, "verse"), (5.0, 10.0, "verse"), (10.0, 15.0, "chorus")]
+    beat_boundaries = np.arange(0.0, 16.0, 1.0)
+
+    segment_ids = build_section_segment_ids(sections, beat_boundaries)
+
+    assert set(np.unique(segment_ids[:5])) == {0}
+    assert set(np.unique(segment_ids[5:10])) == {1}
+    assert set(np.unique(segment_ids[10:15])) == {2}
 
 
 def test_homogeneity_and_novelty_scores_are_finite():
