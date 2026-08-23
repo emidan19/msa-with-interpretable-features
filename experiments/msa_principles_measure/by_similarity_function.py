@@ -227,7 +227,15 @@ def save_global_comparison_plots(results_df: pd.DataFrame, output_dir: Path) -> 
         plt.close(fig)
         saved_paths.append(path)
 
-        fig, ax = plt.subplots(figsize=(max(6.0, 1.2 * len(similarity_types) + 2.0), 4.5))
+    fig, axes = plt.subplots(
+        1,
+        len(METRIC_NAMES),
+        figsize=(max(6.0, 1.2 * len(similarity_types) + 2.0) * len(METRIC_NAMES), 4.5),
+        sharey=True,
+    )
+    if len(METRIC_NAMES) == 1:
+        axes = [axes]
+    for ax, metric_name in zip(axes, METRIC_NAMES):
         values_by_similarity = []
         for similarity_type in similarity_types:
             values = results_df.loc[results_df["similarity_type"] == similarity_type, metric_name].to_numpy(dtype=float)
@@ -241,13 +249,15 @@ def save_global_comparison_plots(results_df: pd.DataFrame, output_dir: Path) -> 
             body.set_alpha(0.85)
         ax.set_xticks(range(1, len(similarity_types) + 1))
         ax.set_xticklabels(similarity_types)
-        ax.set_ylabel(metric_name.replace("_", " ").title())
-        ax.set_title(f"{metric_name.replace('_', ' ').title()} distribution by similarity")
-        fig.tight_layout()
-        violin_path = output_dir / f"{metric_name}_violin.png"
-        fig.savefig(violin_path, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        saved_paths.append(violin_path)
+        ax.set_title(metric_name.replace("_", " ").title())
+        ax.grid(axis="y", alpha=0.25)
+    axes[0].set_ylabel("Score")
+    fig.suptitle("Metric distributions by similarity function")
+    fig.tight_layout()
+    violin_path = output_dir / "metrics_violin.png"
+    fig.savefig(violin_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    saved_paths.append(violin_path)
 
     for region_name in REGION_SCORE_NAMES:
         pivot = results_df.pivot_table(index="feature", columns="similarity_type", values=region_name, aggfunc="mean")
