@@ -31,6 +31,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hop-length", type=int, default=None)
     parser.add_argument("--beat-tracking-method", choices=["librosa", "beat_this", "madmom"], default=None)
     parser.add_argument("--sections-dir", type=Path, default=None)
+    parser.add_argument("--label-format", choices=["rwc_pop", "harmonix"], default=None)
     parser.add_argument("--stm-coeffs", type=int, default=None)
     parser.add_argument("--stm-window-s", type=float, default=None)
     parser.add_argument("--stm-hop-s", type=float, default=None)
@@ -56,6 +57,7 @@ def build_effective_config(args: argparse.Namespace, yaml_cfg: FeatureConfig) ->
                 FeatureConfig.beat_tracking_method,
             ),
             "sections_dir": resolve_value(args.sections_dir, yaml_cfg.sections_dir, FeatureConfig.sections_dir),
+            "label_format": resolve_value(args.label_format, yaml_cfg.label_format, FeatureConfig.label_format),
             "computing_features": normalize_computing_features(yaml_cfg.computing_features),
             "preview_features": normalize_preview_features(args.preview_features)
             if args.preview_features is not None

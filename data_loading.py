@@ -21,11 +21,22 @@ SECTION_LABEL_MAP = {
     "bridge": "bridge",
     "chorus": "chorus",
     "ending": "ending",
+    "end": "ending",
+    "outro": "ending",
     "intro": "intro",
     "nothing": "nothing",
+    "silence": "nothing",
     "post-chorus": "post-chorus",
+    "postchorus": "post-chorus",
     "pre-chorus": "pre-chorus",
+    "prechorus": "pre-chorus",
     "verse": "verse",
+    "inst": "instrumental",
+    "instrumental": "instrumental",
+    "solo": "instrumental",
+    "gtr": "instrumental",
+    "guitar": "instrumental",
+    "guitarsolo": "instrumental",
 }
 
 
@@ -39,6 +50,7 @@ class FeatureConfig:
     beat_tracking_method: str = "beat_this"
     beat_tracking_model_path: str | None = None
     sections_dir: Path | None = None
+    label_format: str = "rwc_pop"
     computing_features: tuple[str, ...] = ("stm", "cens", "sections", "fused")
     preview_features: tuple[str, ...] = ("stm", "cens", "sections")
     preview_formats: tuple[str, ...] = ("png", "svg")
@@ -114,16 +126,33 @@ PREVIEW_FEATURE_ORDER = FEATURE_NAME_ORDER
 
 def normalize_section_label(label: str) -> str:
     normalized = label.strip().strip('"').lower()
-    for prefix, grouped in SECTION_LABEL_MAP.items():
-        if normalized == prefix or normalized.startswith(f"{prefix} "):
-            return grouped
+    stripped = normalized.rstrip("0123456789")
+    for candidate in (normalized, stripped):
+        for prefix, grouped in SECTION_LABEL_MAP.items():
+            if candidate == prefix or candidate.startswith(f"{prefix} "):
+                return grouped
     return normalized
 
 
-def load_sections(sections_dir: Path | None, audio_id: str) -> list[tuple[float, float, str]]:
-    if sections_dir is None:
-        return []
-    labels_path = sections_dir / f"{audio_id}.CHORUS.TXT"
+def normalize_label_format(label_format: str | None) -> str:
+    if label_format is None:
+        return "rwc_pop"
+    normalized = str(label_format).strip().lower()
+    aliases = {
+        "rwc_pop": "rwc_pop",
+        "rwc-pop": "rwc_pop",
+        "rwc": "rwc_pop",
+        "harmonix": "harmonix",
+        "harmonixset": "harmonix",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unknown label format: {label_format!r}. Valid options: rwc_pop, harmonix"
+        )
+    return aliases[normalized]
+
+
+def _load_rwc_pop_sections(labels_path: Path) -> list[tuple[float, float, str]]:
     if not labels_path.exists():
         return []
     sections = []
@@ -141,6 +170,33 @@ def load_sections(sections_dir: Path | None, audio_id: str) -> list[tuple[float,
                 )
             )
     return sections
+
+
+def _load_harmonix_sections(labels_path: Path) -> list[tuple[float, float, str]]:
+    if not labels_path.exists():
+        return []
+    rows: list[tuple[float, str]] = []
+    with labels_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.strip().split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            rows.append((float(parts[0]), parts[1]))
+    sections = []
+    for (start, label), (end, _) in zip(rows, rows[1:]):
+        sections.append((start, end, normalize_section_label(label)))
+    return sections
+
+
+def load_sections(
+    sections_dir: Path | None, audio_id: str, label_format: str = "rwc_pop"
+) -> list[tuple[float, float, str]]:
+    if sections_dir is None:
+        return []
+    label_format = normalize_label_format(label_format)
+    if label_format == "harmonix":
+        return _load_harmonix_sections(sections_dir / f"{audio_id}.txt")
+    return _load_rwc_pop_sections(sections_dir / f"{audio_id}.CHORUS.TXT")
 
 
 def _normalize_feature_names(features: Iterable[str] | None, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -220,6 +276,8 @@ def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
         payload["preview_formats"] = normalize_preview_formats(payload["preview_formats"])
     if "ssm_similarity_type" in payload:
         payload["ssm_similarity_type"] = normalize_ssm_similarity_type(payload["ssm_similarity_type"])
+    if "label_format" in payload:
+        payload["label_format"] = normalize_label_format(payload["label_format"])
     if "ssm_similarity_gamma" in payload and payload["ssm_similarity_gamma"] is not None:
         payload["ssm_similarity_gamma"] = float(payload["ssm_similarity_gamma"])
     return FeatureConfig(**payload)

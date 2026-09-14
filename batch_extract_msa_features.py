@@ -26,6 +26,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None, help="Path to a YAML config file.")
     parser.add_argument("--audio-dir", type=Path, default=None)
     parser.add_argument("--sections-dir", type=Path, default=None)
+    parser.add_argument("--label-format", choices=["rwc_pop", "harmonix"], default=None)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--sr", type=int, default=None)
@@ -76,6 +77,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 args.beat_tracking_method, yaml_cfg.beat_tracking_method, FeatureConfig.beat_tracking_method
             ),
             "sections_dir": resolve_value(args.sections_dir, yaml_cfg.sections_dir, FeatureConfig.sections_dir),
+            "label_format": resolve_value(args.label_format, yaml_cfg.label_format, FeatureConfig.label_format),
             "computing_features": normalize_computing_features(yaml_cfg.computing_features),
             "preview_features": normalize_preview_features(args.preview_features)
             if args.preview_features is not None

@@ -99,7 +99,7 @@ def save_previews(
 def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     y, duration = load_audio(audio_path, cfg.sr)
-    sections = load_sections(cfg.sections_dir, audio_path.stem)
+    sections = load_sections(cfg.sections_dir, audio_path.stem, cfg.label_format)
     requested = set(cfg.computing_features)
 
     need_frame_features = bool(
