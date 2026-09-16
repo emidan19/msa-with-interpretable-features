@@ -17,12 +17,23 @@ import soundfile as sf
 import yaml
 
 
-SECTION_LABEL_MAP = {
+RWC_POP_SECTION_LABEL_MAP = {
+    "bridge": "bridge",
+    "chorus": "chorus",
+    "ending": "ending",
+    "intro": "intro",
+    "nothing": "nothing",
+    "post-chorus": "post-chorus",
+    "pre-chorus": "pre-chorus",
+    "verse": "verse",
+}
+
+HARMONIX_SECTION_LABEL_MAP = {
     "bridge": "bridge",
     "chorus": "chorus",
     "ending": "ending",
     "end": "ending",
-    "outro": "ending",
+    "outro": "outro",
     "intro": "intro",
     "nothing": "nothing",
     "silence": "nothing",
@@ -124,11 +135,13 @@ FEATURE_NAME_ORDER = (
 PREVIEW_FEATURE_ORDER = FEATURE_NAME_ORDER
 
 
-def normalize_section_label(label: str) -> str:
+def normalize_section_label(
+    label: str, section_map: dict[str, str] = RWC_POP_SECTION_LABEL_MAP
+) -> str:
     normalized = label.strip().strip('"').lower()
     stripped = normalized.rstrip("0123456789")
     for candidate in (normalized, stripped):
-        for prefix, grouped in SECTION_LABEL_MAP.items():
+        for prefix, grouped in section_map.items():
             if candidate == prefix or candidate.startswith(f"{prefix} "):
                 return grouped
     return normalized
@@ -166,13 +179,19 @@ def _load_rwc_pop_sections(labels_path: Path) -> list[tuple[float, float, str]]:
                 (
                     int(start_cs) / 100.0,
                     int(end_cs) / 100.0,
-                    normalize_section_label(label),
+                    normalize_section_label(label, RWC_POP_SECTION_LABEL_MAP),
                 )
             )
     return sections
 
 
-def _load_harmonix_sections(labels_path: Path) -> list[tuple[float, float, str]]:
+def _load_harmonix_sections(
+    labels_path: Path, duration: float | None = None
+) -> list[tuple[float, float, str]]:
+    # Per the Harmonix README, each line is "the label of the segment that
+    # starts on the current boundary" - including the last line (typically
+    # "end"), whose segment runs until the true end of the audio. Without a
+    # known `duration` we can't close that final segment, so it's dropped.
     if not labels_path.exists():
         return []
     rows: list[tuple[float, str]] = []
@@ -184,18 +203,27 @@ def _load_harmonix_sections(labels_path: Path) -> list[tuple[float, float, str]]
             rows.append((float(parts[0]), parts[1]))
     sections = []
     for (start, label), (end, _) in zip(rows, rows[1:]):
-        sections.append((start, end, normalize_section_label(label)))
+        sections.append((start, end, normalize_section_label(label, HARMONIX_SECTION_LABEL_MAP)))
+    if rows:
+        last_start, last_label = rows[-1]
+        if duration is not None and duration > last_start:
+            sections.append(
+                (last_start, float(duration), normalize_section_label(last_label, HARMONIX_SECTION_LABEL_MAP))
+            )
     return sections
 
 
 def load_sections(
-    sections_dir: Path | None, audio_id: str, label_format: str = "rwc_pop"
+    sections_dir: Path | None,
+    audio_id: str,
+    label_format: str = "rwc_pop",
+    duration: float | None = None,
 ) -> list[tuple[float, float, str]]:
     if sections_dir is None:
         return []
     label_format = normalize_label_format(label_format)
     if label_format == "harmonix":
-        return _load_harmonix_sections(sections_dir / f"{audio_id}.txt")
+        return _load_harmonix_sections(sections_dir / f"{audio_id}.txt", duration)
     return _load_rwc_pop_sections(sections_dir / f"{audio_id}.CHORUS.TXT")
 
 
