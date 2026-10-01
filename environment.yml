@@ -1,7 +1,6 @@
 name: msa_features
 channels:
   - conda-forge
-  - pytorch
 dependencies:
   - python=3.11
   - tqdm
@@ -13,18 +12,18 @@ dependencies:
   - matplotlib
   - scikit-image
   - scikit-learn
-  - pytorch=2.4.1
-  - torchaudio=2.4.1
-  - torchvision=0.19.1
-  - cpuonly
+  - conda-forge::pytorch=2.4.1
+  - conda-forge::torchaudio=2.4.1
+  - conda-forge::torchvision=0.19.1
   - einops
   - easydict
   - pip
   - pip:
       - essentia
-      - beat-this
       - transformers<5
       - timm
       - nnAudio
       - x_clip
       - muq
+      - beat-this
+      - mir-eval
