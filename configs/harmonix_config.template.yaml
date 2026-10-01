@@ -14,7 +14,7 @@
 audio_path: path/to/song.wav
 
 # Batch mode only:
-audio_dir: /home/emartinez/data/public/harmonixset/dataset/harmonix_wav
+audio_dir: /home/emartinez/data/public/structure/harmonixset/dataset/harmonix_wav
 limit: 10
 
 # Shared output directory:
@@ -27,17 +27,27 @@ out_dir: feature_outputs/example_harmonix
 # `audio_dir` into `out_dir` before segmentation. If it is set, the runner
 # reads *_features.npz files from that folder.
 segmentation:
-  feature_dir: feature_outputs/example_harmonix
-  experiment_dir: experiments/structure_baseline/example_harmonix
+  feature_dir: null
+  experiment_dir: experiments/structure_baseline/example_harmonix2
 
-  # One SSM feature is passed directly to every segmentation algorithm.
-  # If more than one is listed, GraphDitty similarity network fusion is used
-  # and the fused SSM is passed to every algorithm.
+  # Every entry below is run and reported SEPARATELY (each algorithm is run
+  # once per entry, writing results under
+  # <experiment_dir>/<algorithm>__<run_label>/).
+  #
+  # - `ssm_features`: one run per single feature, no fusion between them.
+  # - `graphditty_fusion.features`: one additional run per inner list, each
+  #   fusing just those features into one SSM with GraphDitty. Run label is
+  #   `fused_<feat1>-<feat2>...`.
   ssm_features:
     - musicfm
+    - repcl
+    - muq
+    - mfcc
+    - chroma
     - stm
 
   graphditty_fusion:
+    features: [[stm, repcl], [stm, musicfm], [stm, muq], [stm, mfcc], [stm, chroma]]
     k: 5
     niters: 20
     reg_diag: 1.0
@@ -68,10 +78,10 @@ segmentation:
 
     - id: scluster
       source: msaf
-      run: True
+      run: False
       params:
         rep_feature: stm # global representation feature (must be one of the `computing_features` above!)
-        loc_feature: musicfm # local representation feature (must be one of the `computing_features` above!)
+        loc_feature: stm # local representation feature (must be one of the `computing_features` above!)
         scluster_k: 4
         num_layers: 10
         evec_smooth: 9
@@ -82,7 +92,7 @@ segmentation:
 feature_config:
   # Optional section annotation directory containing *.txt files, one per
   # audio_id (same stem as the .wav), with "start_seconds label" per line.
-  sections_dir: /home/emartinez/data/public/harmonixset/dataset/segments
+  sections_dir: /home/emartinez/data/public/structure/harmonixset/dataset/segments_valid
 
   # Label file naming/format: rwc_pop (*.CHORUS.TXT, tab-separated centiseconds)
   # or harmonix (*.txt, space-separated seconds, end = next row's start).
@@ -96,7 +106,7 @@ feature_config:
   beat_tracking_method: beat_this
 
   # SSL device
-  ssl_device: "cpu"
+  ssl_device: "cuda"
 
   # Computing features
   # Available options:
@@ -115,7 +125,7 @@ feature_config:
     - sections
     - muq
     - musicfm
-    # - repcl
+    - repcl
 
   # Preview rendering
   # Available options:
@@ -128,7 +138,7 @@ feature_config:
     - sections
     - muq
     - musicfm
-    # - repcl
+    - repcl
 
 
   # Output preview image formats

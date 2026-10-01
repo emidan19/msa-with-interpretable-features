@@ -118,45 +118,47 @@ def sf_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
     return [0, *map(int, peaks), matrix.shape[0]]
 
 def scluster_boundaries(
-    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any]
+    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any], feature: str
 ) -> list[int]:
     """Laplacian spectral-clustering segmentation (McFee & Ellis, 2014).
 
     This algorithm does not use the SSM; it builds its own recurrence and path
-    affinities from two beat-synchronous feature streams (chroma/PCP + MFCC),
-    computes the normalized Laplacian, and clusters its spectral embedding.
-    Feature keys and clustering parameters are taken from the config, with
-    defaults mirroring ``msaf/.../scluster/config.py``.
+    affinities from beat-synchronous features, computes the normalized
+    Laplacian, and clusters its spectral embedding. A single ``feature`` (one
+    of ``segmentation.ssm_features``) is used both as the repetition
+    (harmonic) and the local (timbral) representation. Clustering parameters
+    are taken from the config, with defaults mirroring
+    ``msaf/.../scluster/config.py``.
     """
     scluster = load_msaf_scluster_module()
     params = dict(algorithm.get("params", {}))
 
     config = {
-    "rep_feature": str(params.get("rep_feature", "cens")),
-    "loc_feature": str(params.get("loc_feature", "mfcc")),
-    "scluster_k": int(params.get("scluster_k", 4)),
-    "num_layers": int(params.get("num_layers", 10)),
-    "evec_smooth": int(params.get("evec_smooth", 9)),
-    "rec_smooth": int(params.get("rec_smooth", 9)),
-    "rec_width": int(params.get("rec_width", 9)),
-    "hier": False,
-}
+        "scluster_k": int(params.get("scluster_k", 4)),
+        "num_layers": int(params.get("num_layers", 10)),
+        "evec_smooth": int(params.get("evec_smooth", 9)),
+        "rec_smooth": int(params.get("rec_smooth", 9)),
+        "rec_width": int(params.get("rec_width", 9)),
+        "hier": False,
+    }
     n_frames = matrix.shape[0]
-    harmonic = _select_feature(features, config["rep_feature"], n_frames)
-    timbral = _select_feature(features, config["loc_feature"], n_frames)
+    feature_array = _select_feature(features, feature, n_frames)
 
-
-    est_idxs, _est_labels, _cnorm = scluster.do_segmentation(harmonic, timbral, config, None)
-    return [*map(int, np.asarray(est_idxs)), n_frames]
+    est_idxs, _est_labels, _cnorm = scluster.do_segmentation(feature_array, feature_array, config, None)
+    # MSAF closes the list with the last beat index (n_frames - 1); replace it
+    # with n_frames and drop duplicates so no empty/1-beat tail segment appears.
+    inner = {int(idx) for idx in np.asarray(est_idxs)[:-1] if 0 < int(idx) < n_frames}
+    return [0, *sorted(inner), n_frames]
 
 def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) -> np.ndarray:
     """Return a ``(n_dims, n_frames)`` feature array from the loaded ``.npz``.
 
-    Prefers the requested key as-is, then its ``beat_`` (beat-synchronous)
-    variant -- the beat grid is what the SSMs and boundary indices are aligned
-    to. Orients the array so the frame axis matches ``n_frames``.
+    Prefers the ``beat_`` (beat-synchronous) variant, then the requested key
+    as-is -- the beat grid is what the SSMs and boundary indices are aligned
+    to (raw keys such as ``stm`` or ``mfcc`` live on their own time grids).
+    Orients the array so the frame axis matches ``n_frames``.
     """
-    candidates = [requested, f"beat_{requested}"] if not requested.startswith("beat_") else [requested]
+    candidates = [f"beat_{requested}", requested] if not requested.startswith("beat_") else [requested]
     key = next((name for name in candidates if name in features), None)
     if key is None:
         available = sorted(name for name in features if not name.startswith("ssm_"))
@@ -167,9 +169,11 @@ def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) 
     if array.ndim != 2:
         raise ValueError(f"Feature {key!r} must be 2-D, got shape {array.shape}.")
     # Orient as (n_dims, n_frames) to match the beat-synchronous SSM grid.
-    if array.shape[1] != n_frames and array.shape[0] == n_frames:
+    if array.shape[1] == n_frames:
+        pass
+    elif array.shape[0] == n_frames:
         array = array.T
-    elif array.shape[0] != n_frames:
+    else:
         # Interpolate time dimention to match n_frames
         array = scipy.interpolate.interp1d(
             np.linspace(0, 1, num=array.shape[0]), array, axis=0, kind="nearest", fill_value="extrapolate"
@@ -177,7 +181,10 @@ def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) 
     return array
 
 def run_algorithm(
-    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any] | None = None
+    matrix: np.ndarray,
+    algorithm: dict[str, Any],
+    features: Mapping[str, Any] | None = None,
+    feature: str | None = None,
 ) -> list[int]:
     algorithm_id = str(algorithm["id"]).lower()
     if algorithm_id in {"cbm", "as_seg_cbm", "msaf_cbm"}:
@@ -189,9 +196,11 @@ def run_algorithm(
     if algorithm_id in {"sf", "msaf_sf"}:
         return sf_boundaries(matrix, algorithm)
     if algorithm_id in {"scluster", "msaf_scluster"}:
-        if features is None:
-            raise ValueError(f"Algorithm {algorithm['id']!r} requires the loaded feature arrays.")
-        return scluster_boundaries(matrix, algorithm, features)
+        if features is None or feature is None:
+            raise ValueError(
+                f"Algorithm {algorithm['id']!r} requires the loaded feature arrays and a single feature name."
+            )
+        return scluster_boundaries(matrix, algorithm, features, feature)
     raise ValueError(
         f"Unsupported segmentation algorithm {algorithm['id']!r}. "
         f"Supported ids: {', '.join(SUPPORTED_ALGORITHMS)}."

@@ -92,3 +92,45 @@ def resolve_segmentation_ssm(
     matrices = [load_ssm(data, feature) for feature in features]
     matrix = matrices[0] if len(matrices) == 1 else fuse_ssms_with_graphditty(matrices, fusion_cfg)
     return normalize_ssm(matrix), features
+
+
+def build_ssm_runs(
+    ssm_features: Iterable[str],
+    fusion_combos: Iterable[Iterable[str]],
+) -> list[tuple[str, list[str]]]:
+    """Expand config into one independent SSM run per entry.
+
+    Each feature in `ssm_features` becomes its own single-feature run (they
+    are no longer fused together implicitly). Each combo listed under
+    `graphditty_fusion.features` becomes an additional fused run over just
+    those features. Returns a list of `(run_label, feature_list)` pairs.
+    """
+    runs: list[tuple[str, list[str]]] = []
+    seen_labels: set[str] = set()
+
+    def add_run(label: str, features: list[str]) -> None:
+        if label in seen_labels:
+            raise ValueError(
+                f"Duplicate SSM run label {label!r}; check for repeated entries in "
+                "`ssm_features` / `graphditty_fusion.features`."
+            )
+        seen_labels.add(label)
+        runs.append((label, features))
+
+    for feature in ssm_features:
+        feature = str(feature).strip().lower()
+        if feature:
+            add_run(feature, [feature])
+
+    for combo in fusion_combos:
+        features = [str(feature).strip().lower() for feature in combo if str(feature).strip()]
+        if len(features) < 2:
+            raise ValueError(f"`graphditty_fusion.features` entries must list 2+ features, got {combo!r}.")
+        add_run("fused_" + "-".join(features), features)
+
+    if not runs:
+        raise ValueError(
+            "No SSM runs configured: set `segmentation.ssm_features` and/or "
+            "`graphditty_fusion.features` in the YAML config."
+        )
+    return runs

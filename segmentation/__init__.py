@@ -27,6 +27,7 @@ from .algorithms import (
 from .ssm import (
     SSM_FEATURE_TO_KEY,
     add_repo_to_path,
+    build_ssm_runs,
     fuse_ssms_with_graphditty,
     load_ssm,
     normalize_ssm,
@@ -37,6 +38,7 @@ __all__ = [
     "SUPPORTED_ALGORITHMS",
     "SSM_FEATURE_TO_KEY",
     "add_repo_to_path",
+    "build_ssm_runs",
     "cbm_boundaries",
     "foote_boundaries",
     "fuse_ssms_with_graphditty",
