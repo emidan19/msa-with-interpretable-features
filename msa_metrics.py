@@ -648,6 +648,42 @@ def segmentation_boundary_metrics(
 
     return result
 
+
+def boundary_hit_vector(
+    reference_segments: Iterable[Segment | Sequence[float]],
+    estimated_segments: Iterable[Segment | Sequence[float]],
+    *,
+    window: float = 0.5,
+) -> np.ndarray:
+    """
+    Binary hit/miss vector over the reference boundaries.
+
+    Entry i is 1 if reference boundary i is matched by an estimated boundary
+    within ``window`` seconds, else 0. Uses the same one-to-one matching as
+    ``mir_eval.segment.detection`` (trim=False), so ``hits.mean()`` equals the
+    boundary recall at that window.
+    """
+
+    ref = coerce_segments(reference_segments)
+    est = coerce_segments(estimated_segments)
+
+    if not ref:
+        raise ValueError("reference_segments is empty.")
+
+    ref_boundaries = mir_eval.util.intervals_to_boundaries(
+        np.asarray([[seg.start, seg.end] for seg in ref], dtype=float)
+    )
+    hits = np.zeros(len(ref_boundaries), dtype=int)
+
+    if est:
+        est_boundaries = mir_eval.util.intervals_to_boundaries(
+            np.asarray([[seg.start, seg.end] for seg in est], dtype=float)
+        )
+        for ref_idx, _ in mir_eval.util.match_events(ref_boundaries, est_boundaries, float(window)):
+            hits[ref_idx] = 1
+
+    return hits
+
 __all__ = [
     "Path",
     "Segment",
@@ -684,4 +720,5 @@ __all__ = [
     "hierarchical_balance_absolute",
     "segmentation_regularity_metrics",
     "segmentation_boundary_metrics",
+    "boundary_hit_vector",
 ]
