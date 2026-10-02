@@ -107,7 +107,7 @@ feature_config:
   # - Classical audio features -
   #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density
   # - SSL models -
-  #   muq, matpac, musicfm, repcl
+  #   muq, matpac, musicfm, repcl, mule
   # - Sections (labels) -  
   #   sections
 
@@ -120,6 +120,7 @@ feature_config:
     - muq
     - musicfm
     - repcl
+    - mule
 
   # Preview rendering
   # Available options:

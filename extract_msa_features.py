@@ -94,7 +94,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise SystemExit(f"Audio file not found: {audio_path}")
 
     summary = extract_all(audio_path, out_dir, cfg)
-    print(json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2, default=str))
     return 0
 
 

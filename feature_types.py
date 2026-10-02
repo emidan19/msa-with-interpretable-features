@@ -348,7 +348,7 @@ def extract_ssl_features(
     feature_names: set[str],
     beat_boundaries: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
-    requested = feature_names & {"musicfm", "muq", "matpac", "repcl"}
+    requested = feature_names & {"musicfm", "muq", "matpac", "repcl", "mule"}
     if not requested:
         return {}
 
@@ -418,7 +418,80 @@ def extract_ssl_features(
                 _resample_if_needed, cfg, device, beat_boundaries
             )
 
+    if "mule" in requested:
+        wav_16k = _resample_if_needed(16000).squeeze(0).cpu().numpy().astype(np.float32)
+        outputs["mule"] = _extract_mule_embeddings(wav_16k, cfg)
+
     return outputs
+
+
+def _extract_mule_embeddings(y_16k: np.ndarray, cfg: FeatureConfig) -> np.ndarray:
+    """MULE (Musicset Unsupervised Large Embedding) timeline, shape (1728, n_frames).
+
+    Reproduces the `mule_embedding_timeline.yml` pipeline of
+    PandoraMedia/music-audio-representations (log-mel at 16 kHz, 300-frame slices,
+    per-slice standardization), but with a configurable hop (`cfg.mule_hop_frames`).
+    Embedding i is centred at i * mule_hop_frames * 10 ms.
+    """
+    import os
+
+    try:
+        import tensorflow as tf
+        from mule.models.layers import ScalarMultiply, StochDepth, WeightStandardization
+    except ImportError as exc:
+        raise RuntimeError("TensorFlow and sxmp-mule are required for MULE feature extraction.") from exc
+
+    # Keep TensorFlow from grabbing all GPU memory needed by the torch models.
+    for gpu in tf.config.list_physical_devices("GPU"):
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError:
+            pass
+
+    mel_hop = 160
+    look_back = look_forward = 150
+    mel = librosa.feature.melspectrogram(
+        y=y_16k,
+        sr=16000,
+        n_fft=2048,
+        hop_length=mel_hop,
+        win_length=400,
+        window="hann",
+        center=True,
+        pad_mode="reflect",
+        power=2.0,
+        n_mels=96,
+        fmin=0.0,
+        fmax=8000.0,
+        norm=2.0,
+        htk=True,
+        dtype=np.float32,
+    )
+    mel = np.log10(10000.0 * mel + 1.0)
+    mel = np.nan_to_num(mel, nan=-9999999999.0, posinf=-9999999999.0, neginf=-9999999999.0)
+
+    n_frames = mel.shape[1]
+    window = look_back + look_forward
+    if n_frames < window:
+        mel = np.pad(mel, ((0, 0), (0, window - n_frames)))
+    centers = np.arange(0, n_frames, max(1, int(cfg.mule_hop_frames)))
+    centers = np.clip(centers, look_back, mel.shape[1] - look_forward)
+    slices = np.stack([mel[:, c - look_back : c + look_forward] for c in centers])[..., None]
+    slices -= slices.mean(axis=(1, 2, 3), keepdims=True)
+    std = np.nan_to_num(slices.std(axis=(1, 2, 3), keepdims=True), nan=1.0, posinf=1.0, neginf=1.0)
+    slices /= np.maximum(std, 0.01)
+
+    tf_device = "/GPU:0" if cfg.ssl_device.startswith("cuda") and tf.config.list_physical_devices("GPU") else "/CPU:0"
+    with tf.device(tf_device):
+        model = tf.keras.models.load_model(
+            os.fspath(cfg.mule_model_path),
+            custom_objects={
+                cls.__name__: cls for cls in (WeightStandardization, StochDepth, ScalarMultiply)
+            },
+            compile=False,
+        )
+        emb = model.predict(slices, batch_size=cfg.mule_batch_size, verbose=0)
+    return np.asarray(emb, dtype=np.float32).T
 
 
 def _extract_repcl_embeddings(

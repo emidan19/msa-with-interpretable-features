@@ -127,7 +127,7 @@ def extract_all(
         }
     )
     need_stm = "stm" in requested
-    need_ssl = bool(requested & {"musicfm", "muq", "matpac", "repcl"})
+    need_ssl = bool(requested & {"musicfm", "muq", "matpac", "repcl", "mule"})
 
     frame_times = np.zeros(0, dtype=np.float32)
     mfcc = chroma = cens = None
@@ -167,6 +167,10 @@ def extract_all(
             if name == "repcl":
                 # Already one embedding per beat interval; no time-based aggregation needed.
                 beat_level_features[name] = features
+            elif name == "mule":
+                # Embedding i is centred on mel frame i * mule_hop_frames (10 ms frames).
+                mule_times = np.arange(features.shape[1], dtype=np.float32) * cfg.mule_hop_frames * 0.01
+                beat_level_features[name] = aggregate_by_intervals(features, mule_times, beat_boundaries)
             else:
                 ssl_times = np.linspace(0.0, duration, num=features.shape[1], endpoint=False, dtype=np.float32)
                 beat_level_features[name] = aggregate_by_intervals(features, ssl_times, beat_boundaries)

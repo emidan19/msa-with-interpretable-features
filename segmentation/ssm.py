@@ -25,6 +25,7 @@ SSM_FEATURE_TO_KEY = {
     "muq": "ssm_muq",
     "matpac": "ssm_matpac",
     "repcl": "ssm_repcl",
+    "mule": "ssm_mule",
     "fused": "ssm_fused",
 }
 

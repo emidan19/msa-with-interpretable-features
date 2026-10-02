@@ -4,9 +4,9 @@ channels:
 dependencies:
   - python=3.11
   - tqdm
-  - numpy>=1.26.4,<2.0
+  - numpy==1.26.4
   - scipy
-  - librosa
+  - librosa==0.11.0
   - pysoundfile
   - pandas
   - matplotlib
@@ -25,5 +25,6 @@ dependencies:
       - nnAudio
       - x_clip
       - muq
+      - sxmp-mule
       - beat-this
       - mir-eval

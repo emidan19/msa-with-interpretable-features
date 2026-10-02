@@ -146,6 +146,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "muq_shape": shape_str(summary, "beat_muq"),
                     "matpac_shape": shape_str(summary, "beat_matpac"),
                     "repcl_shape": shape_str(summary, "beat_repcl"),
+                    "mule_shape": shape_str(summary, "beat_mule"),
                     "features_npz": summary["outputs"]["features_npz"],
                     "preview_png": summary["outputs"]["preview_png"],
                     "preview_svg": summary["outputs"]["preview_svg"],

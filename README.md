@@ -37,6 +37,7 @@ conda activate msa_features
   ``` 
   make sure to have the SSL models repos ([MusicFM](https://github.com/minzwon/musicfm), [MuQ](https://github.com/tencent-ailab/MuQ/), [MATPAC](https://github.com/aurianworld/matpac/), or any other you want) at ``msa-with-interpretable-features/../../SSL_models``
   - The `repcl` option instead loads the repetition-based triplet-mining model from [Triplet Mining](https://github.com/morgan76/Triplet_Mining/tree/main)
+  - The `mule` option loads the TensorFlow/Keras MULE model from [music-audio-representations](https://github.com/PandoraMedia/music-audio-representations) (`supporting_data/model/model.keras`, fetched with `git lfs pull`; requires `sxmp-mule`). Configure it with `mule_model_path`, `mule_hop_frames` (embedding hop in 10 ms mel frames, default 50 = 0.5 s) and `mule_batch_size`.
 - `pipeline.py`: orchestrates extraction, beat-synchronous aggregation, preview rendering, and output writing.
 
 ## Config File

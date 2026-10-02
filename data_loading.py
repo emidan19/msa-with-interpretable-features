@@ -100,6 +100,17 @@ class FeatureConfig:
         / "pretrained_msd.pt"
     )
     muq_model_name: str = "OpenMuQ/MuQ-large-msd-iter"
+    mule_model_path: Path = field(
+        default_factory=lambda: Path(__file__).resolve().parents[2]
+        / "SSL_models"
+        / "music-audio-representations"
+        / "supporting_data"
+        / "model"
+        / "model.keras"
+    )
+    # Hop between MULE embeddings in mel frames (10 ms each). The original MULE timeline uses 200 (2 s).
+    mule_hop_frames: int = 50
+    mule_batch_size: int = 64
 
     triplet_mining_root: Path = field(
         default_factory=lambda: Path(__file__).resolve().parents[2] / "SSL_models" / "Triplet_Mining"
@@ -129,6 +140,7 @@ FEATURE_NAME_ORDER = (
     "muq",
     "matpac",
     "repcl",
+    "mule",
     "sections",
     "fused",
 )
@@ -301,6 +313,7 @@ def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
         "musicfm_model_path",
         "triplet_mining_root",
         "repcl_checkpoint_path",
+        "mule_model_path",
     ):
         if path_key in payload and payload[path_key] is not None:
             payload[path_key] = Path(payload[path_key])
