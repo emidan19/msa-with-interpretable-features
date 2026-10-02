@@ -222,9 +222,17 @@ def load_sections(
     if sections_dir is None:
         return []
     label_format = normalize_label_format(label_format)
+    path = sections_path(sections_dir, audio_id, label_format)
     if label_format == "harmonix":
-        return _load_harmonix_sections(sections_dir / f"{audio_id}.txt", duration)
-    return _load_rwc_pop_sections(sections_dir / f"{audio_id}.CHORUS.TXT")
+        return _load_harmonix_sections(path, duration)
+    return _load_rwc_pop_sections(path)
+
+
+def sections_path(sections_dir: Path, audio_id: str, label_format: str = "rwc_pop") -> Path:
+    """Path of the section annotation file for `audio_id` (it may not exist)."""
+    if normalize_label_format(label_format) == "harmonix":
+        return Path(sections_dir) / f"{audio_id}.txt"
+    return Path(sections_dir) / f"{audio_id}.CHORUS.TXT"
 
 
 def _normalize_feature_names(features: Iterable[str] | None, default: tuple[str, ...]) -> tuple[str, ...]:

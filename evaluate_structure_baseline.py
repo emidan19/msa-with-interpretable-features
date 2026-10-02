@@ -22,10 +22,12 @@ via `msa_metrics.py`:
 The experiment directory and the ground-truth label lookup are normally taken
 from the same YAML config used by `run_structure_baseline.py` (`--config`):
 `segmentation.experiment_dir` and `feature_config.sections_dir` /
-`label_format`. When a JAMS file doesn't carry the reference annotation
-(older runs, or `sections_dir` unset at generation time), that config is used
-to load the ground truth directly, and the row's `reference_source` column
-records whether it came from the JAMS or from the config.
+`label_format`. Only JAMS files whose track has a reference annotation file
+in `sections_dir` are evaluated; the rest are skipped. When a JAMS file doesn't
+carry the reference annotation itself (older runs, or `sections_dir` unset at
+generation time), the ground truth is loaded from `sections_dir`, and the
+row's `reference_source` column records whether it came from the JAMS or from
+the config.
 
 Results are written under `<experiment_dir>/results/`: a per-track detailed
 CSV, a per-(feature/fusion, algorithm) aggregated CSV, and one grouped
@@ -121,8 +123,9 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=None,
         help="YAML config also used by run_structure_baseline.py. Supplies "
         "`segmentation.experiment_dir` (unless --experiment-dir is given) and the "
-        "ground-truth label lookup `feature_config.sections_dir` / `label_format`, "
-        "used as a fallback for JAMS files that don't embed a reference annotation.",
+        "ground-truth label lookup `feature_config.sections_dir` / `label_format` "
+        "(required): only JAMS files with a reference annotation file in "
+        "`sections_dir` are evaluated.",
     )
     parser.add_argument(
         "--experiment-dir",
@@ -235,13 +238,20 @@ HitIndex = dict[tuple[str, str, str, float], np.ndarray]
 
 
 def collect_rows(
-    experiment_dir: Path, sections_dir: Path | None, label_format: str
+    experiment_dir: Path, sections_dir: Path, label_format: str
 ) -> tuple[pd.DataFrame, HitIndex]:
+    from data_loading import sections_path
+
     rows = []
     hit_index: HitIndex = {}
     skipped = []
+    unlabeled = set()
     for algorithm, ssm_run, run_dir in find_run_dirs(experiment_dir):
         for jams_path in sorted(run_dir.glob("*.jams")):
+            # Only evaluate tracks with reference labels in sections_dir.
+            if not sections_path(sections_dir, jams_path.stem, label_format).exists():
+                unlabeled.add(jams_path.stem)
+                continue
             result = evaluate_jams(jams_path, sections_dir, label_format)
             if result is None:
                 skipped.append(jams_path)
@@ -250,16 +260,15 @@ def collect_rows(
             rows.append({"track_id": jams_path.stem, "algorithm": algorithm, "ssm_run": ssm_run, **metrics})
             for window, vector in hits.items():
                 hit_index[(algorithm, ssm_run, jams_path.stem, window)] = vector
+    if unlabeled:
+        print(f"Skipped {len(unlabeled)} track(s) with no reference labels in {sections_dir}.")
     if skipped:
-        print(
-            f"Skipped {len(skipped)} JAMS with no reference segmentation available "
-            "(missing from both the JAMS file and the configured sections_dir)."
-        )
+        print(f"Skipped {len(skipped)} JAMS with an empty estimated or reference segmentation.")
     if not rows:
         raise SystemExit(
             "No usable <algorithm>__<ssm_run>/*.jams files with both an estimated and a "
-            f"reference segmentation were found under {experiment_dir}. Pass --config with "
-            "`feature_config.sections_dir` set if the JAMS files don't embed ground truth."
+            f"reference segmentation were found under {experiment_dir} for the tracks "
+            f"labeled in {sections_dir}."
         )
     df = pd.DataFrame(rows)
     n_from_config = int((df["reference_source"] == "config").sum())
@@ -495,6 +504,13 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     sections_dir = Path(feature_cfg_raw["sections_dir"]).expanduser() if feature_cfg_raw.get("sections_dir") else None
     label_format = feature_cfg_raw.get("label_format", "rwc_pop")
+    if sections_dir is None:
+        raise SystemExit(
+            "Set `feature_config.sections_dir` in the YAML passed via --config: only JAMS "
+            "files with reference labels in that folder are evaluated."
+        )
+    if not sections_dir.is_dir():
+        raise SystemExit(f"sections_dir not found: {sections_dir}")
 
     results_dir = args.results_dir or (experiment_dir / "results")
     results_dir.mkdir(parents=True, exist_ok=True)

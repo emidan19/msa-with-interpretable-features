@@ -96,8 +96,19 @@ def save_previews(
     plt.close(fig)
 
 
-def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def extract_all(
+    audio_path: Path,
+    out_dir: Path | None,
+    cfg: FeatureConfig,
+    return_payload: bool = False,
+) -> dict | tuple[dict, dict[str, object]]:
+    """Extract features for `audio_path`.
+
+    If `out_dir` is None, nothing is written to disk. With `return_payload=True`
+    the in-memory npz payload is returned alongside the summary.
+    """
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
     y, duration = load_audio(audio_path, cfg.sr)
     sections = load_sections(cfg.sections_dir, audio_path.stem, cfg.label_format, duration)
     requested = set(cfg.computing_features)
@@ -172,9 +183,10 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
         ssm_map["sections"] = build_section_ssm(sections, beat_boundaries)
 
     stem = audio_path.stem
-    npz_path = out_dir / f"{stem}_features.npz"
-    preview_paths = [out_dir / f"{stem}_preview.{fmt}" for fmt in cfg.preview_formats]
-    summary_path = out_dir / f"{stem}_summary.json"
+    save = out_dir is not None
+    npz_path = out_dir / f"{stem}_features.npz" if save else None
+    preview_paths = [out_dir / f"{stem}_preview.{fmt}" for fmt in cfg.preview_formats] if save else []
+    summary_path = out_dir / f"{stem}_summary.json" if save else None
 
     npz_payload: dict[str, object] = {
         "audio_path": str(audio_path),
@@ -205,18 +217,19 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
         npz_payload[f"beat_{name}"] = features
     for name, matrix in ssm_map.items():
         npz_payload[f"ssm_{name}"] = matrix
-    np.savez_compressed(npz_path, **npz_payload)
+    if save:
+        np.savez_compressed(npz_path, **npz_payload)
 
-    save_previews(
-        preview_paths,
-        ssm_map,
-        y,
-        cfg.sr,
-        beat_boundaries,
-        downbeat_boundaries,
-        sections,
-        cfg.preview_features,
-    )
+        save_previews(
+            preview_paths,
+            ssm_map,
+            y,
+            cfg.sr,
+            beat_boundaries,
+            downbeat_boundaries,
+            sections,
+            cfg.preview_features,
+        )
 
     summary = {
         "audio_path": str(audio_path),
@@ -224,11 +237,11 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
         "config": asdict(cfg),
         "computed_features": sorted(beat_level_features.keys()) + (["sections"] if "sections" in ssm_map else []),
         "outputs": {
-            "features_npz": str(npz_path),
-            "preview_png": str(preview_paths[0]) if "png" in cfg.preview_formats else "",
-            "preview_svg": str(out_dir / f"{stem}_preview.svg") if "svg" in cfg.preview_formats else "",
+            "features_npz": str(npz_path) if save else "",
+            "preview_png": str(preview_paths[0]) if save and "png" in cfg.preview_formats else "",
+            "preview_svg": str(out_dir / f"{stem}_preview.svg") if save and "svg" in cfg.preview_formats else "",
             "preview_files": [str(path) for path in preview_paths],
-            "summary_json": str(summary_path),
+            "summary_json": str(summary_path) if save else "",
         },
         "shapes": {},
         "diagnostics": {
@@ -263,5 +276,8 @@ def extract_all(audio_path: Path, out_dir: Path, cfg: FeatureConfig) -> dict:
             "stm_median_estimated_beats_per_window": float(np.median(stm_beat_counts)) if stm_beat_counts.size else 0.0,
         }
     )
-    write_summary(summary_path, summary)
+    if save:
+        write_summary(summary_path, summary)
+    if return_payload:
+        return summary, npz_payload
     return summary

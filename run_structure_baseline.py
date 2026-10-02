@@ -9,7 +9,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 _CACHE_ROOT = os.path.join(os.getcwd(), ".cache")
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(_CACHE_ROOT, "matplotlib"))
@@ -20,7 +20,7 @@ for _cache_dir in (os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"]):
 import numpy as np
 import yaml
 
-from msa_metrics import Segment, cbm_segment_score, segmentation_regularity_metrics, segmentation_boundary_metrics
+from msa_metrics import Segment, cbm_segment_score
 from segmentation import build_ssm_runs, normalize_algorithms, resolve_segmentation_ssm, run_algorithm
 
 
@@ -127,6 +127,21 @@ def ensure_features(audio_path: Path, feature_dir: Path, cfg: FeatureConfig) -> 
 
     summary = extract_all(audio_path, feature_dir, cfg)
     return Path(summary["outputs"]["features_npz"])
+
+
+class InMemoryFeatures(dict):
+    """Dict of feature arrays exposing `.files` like a loaded `np.load` npz."""
+
+    @property
+    def files(self) -> list[str]:
+        return list(self.keys())
+
+
+def compute_features_in_memory(audio_path: Path, cfg: FeatureConfig) -> InMemoryFeatures:
+    from pipeline import extract_all
+
+    _, payload = extract_all(audio_path, None, cfg, return_payload=True)
+    return InMemoryFeatures(payload)
 
 
 def frame_index_to_times(indices: Iterable[int], n_frames: int, beat_boundaries: np.ndarray, duration: float) -> list[float]:
@@ -252,124 +267,132 @@ def process_feature_file(
     ssm_runs: list[tuple[str, list[str]]],
     fusion_cfg: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    rows = []
     with np.load(feature_npz, allow_pickle=True) as data:
-        base_duration = float(np.asarray(data["duration"]).item()) if "duration" in data else None
-        sections = np.asarray(data["sections"]) if "sections" in data else None
-        beat_boundaries = np.asarray(data["beat_boundaries"]) if "beat_boundaries" in data else np.array([])
-        audio_path = str(np.asarray(data["audio_path"]).item()) if "audio_path" in data else feature_npz.stem
-        track_id = Path(audio_path).stem
+        return process_feature_data(data, str(feature_npz), experiment_dir, algorithms, ssm_runs, fusion_cfg)
 
-        # Reference segments (if available); independent of the SSM run.
-        ref_segments = [
-            Segment(start=float(start), end=float(end), label=f"{idx} : {label}")
-            for idx, (start, end, label) in enumerate(sections if sections is not None else [])
-        ]
 
-        for ssm_label, ssm_feature_list in ssm_runs:
-            matrix, resolved_features = resolve_segmentation_ssm(data, ssm_feature_list, fusion_cfg)
-            n_frames = matrix.shape[0]
-            duration = base_duration if base_duration is not None else float(n_frames)
-            # If this run fused multiple SSMs with GraphDitty, save the fused
-            # SSM to the experiment folder so it can be inspected later, under
-            # <experiment_dir>/fusion_ssms/<track_id>__<ssm_label>_fused_ssm.npz
-            # with key "ssm_fused".
-            if len(resolved_features) > 1:
-                try:
-                    fusion_dir = experiment_dir / "fusion_ssms"
-                    fusion_dir.mkdir(parents=True, exist_ok=True)
-                    fusion_path = fusion_dir / f"{track_id}__{ssm_label}_fused_ssm.npz"
-                    np.savez_compressed(
-                        fusion_path,
-                        ssm_fused=matrix,
-                        ssm_features=np.asarray(resolved_features, dtype=object),
-                        audio_path=audio_path,
-                    )
-                except Exception:
-                    # Do not fail the whole run if saving the fused SSM fails.
-                    pass
-            for algorithm in algorithms:
-                # Get algo name, suffixed with the SSM run so each feature /
-                # fusion combo writes to its own subdirectory.
-                slug = algorithm_slug(algorithm)
-                run_slug = f"{slug}__{ssm_label}"
-                is_scluster = str(algorithm["id"]).lower() in {"scluster", "msaf_scluster"}
-                # Spectral clustering works on a single raw feature, so it is
-                # only run on single-feature runs (not on GraphDitty fusions).
-                if is_scluster and len(resolved_features) != 1:
-                    continue
-                start_time = time.perf_counter()
-                # Run segmentation algo
-                if is_scluster:
-                    boundary_indices = run_algorithm(matrix, algorithm, data, feature=resolved_features[0])
-                else:
-                    boundary_indices = run_algorithm(matrix, algorithm)
-                # Convert frame indices to times, using beat boundaries if available.
-                boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
-                # Set segments
-                segments = [
-                    Segment(start=float(start), end=float(end), label=f"S{idx + 1:02d}")
-                    for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:]))
-                ]
+def process_feature_data(
+    data: Mapping[str, Any],
+    features_npz: str,
+    experiment_dir: Path,
+    algorithms: list[dict[str, Any]],
+    ssm_runs: list[tuple[str, list[str]]],
+    fusion_cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Segment one track from its feature arrays (a loaded npz or an in-memory dict).
 
-                ### Compute metrics
+    `features_npz` is the npz path recorded in the summary ("" if not on disk).
+    """
+    rows = []
+    base_duration = float(np.asarray(data["duration"]).item()) if "duration" in data else None
+    sections = np.asarray(data["sections"]) if "sections" in data else None
+    beat_boundaries = np.asarray(data["beat_boundaries"]) if "beat_boundaries" in data else np.array([])
+    audio_path = str(np.asarray(data["audio_path"]).item()) if "audio_path" in data else Path(features_npz).stem
+    track_id = Path(audio_path).stem
 
-                # Homogeneity with convolitonal block-matching (CBM) and regularity penalty
-                cbm_scores = np.array([
-                    cbm_segment_score(matrix, start_idx, end_idx, return_homogeneity_penalty=True)
-                    for start_idx, end_idx in zip(boundary_indices[:-1], boundary_indices[1:])
-                ])
-                cbm_mean_scores = np.mean(cbm_scores, axis=0) if cbm_scores.size else np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    # Reference segments (if available); independent of the SSM run.
+    ref_segments = [
+        Segment(start=float(start), end=float(end), label=f"{idx} : {label}")
+        for idx, (start, end, label) in enumerate(sections if sections is not None else [])
+    ]
 
-                segment_metrics = [
-                    {
-                        "cbm_score": float(score[0]),
-                        "homogeneity_score": float(score[1]),
-                        "penalty_score": float(score[2]),
-                    }
-                    for score in cbm_scores
-                ]
+    for ssm_label, ssm_feature_list in ssm_runs:
+        matrix, resolved_features = resolve_segmentation_ssm(data, ssm_feature_list, fusion_cfg)
+        n_frames = matrix.shape[0]
+        duration = base_duration if base_duration is not None else float(n_frames)
+        # If this run fused multiple SSMs with GraphDitty, save the fused
+        # SSM to the experiment folder so it can be inspected later, under
+        # <experiment_dir>/fusion_ssms/<track_id>__<ssm_label>_fused_ssm.npz
+        # with key "ssm_fused".
+        if len(resolved_features) > 1:
+            try:
+                fusion_dir = experiment_dir / "fusion_ssms"
+                fusion_dir.mkdir(parents=True, exist_ok=True)
+                fusion_path = fusion_dir / f"{track_id}__{ssm_label}_fused_ssm.npz"
+                np.savez_compressed(
+                    fusion_path,
+                    ssm_fused=matrix,
+                    ssm_features=np.asarray(resolved_features, dtype=object),
+                    audio_path=audio_path,
+                )
+            except Exception:
+                # Do not fail the whole run if saving the fused SSM fails.
+                pass
+        for algorithm in algorithms:
+            # Get algo name, suffixed with the SSM run so each feature /
+            # fusion combo writes to its own subdirectory.
+            slug = algorithm_slug(algorithm)
+            run_slug = f"{slug}__{ssm_label}"
+            is_scluster = str(algorithm["id"]).lower() in {"scluster", "msaf_scluster"}
+            # Spectral clustering works on a single raw feature, so it is
+            # only run on single-feature runs (not on GraphDitty fusions).
+            if is_scluster and len(resolved_features) != 1:
+                continue
+            start_time = time.perf_counter()
+            # Run segmentation algo
+            if is_scluster:
+                boundary_indices = run_algorithm(matrix, algorithm, data, feature=resolved_features[0])
+            else:
+                boundary_indices = run_algorithm(matrix, algorithm)
+            # Convert frame indices to times, using beat boundaries if available.
+            boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
 
-                cbm_metrics = {
-                    "cbm_score_mean": float(cbm_mean_scores[0]),
-                    "homogeneity_mean_score": float(cbm_mean_scores[1]),
-                    "penalty_mean_score": float(cbm_mean_scores[2]),
+            ### Compute metrics
+            # Only SSM-based metrics are computed here; regularity/balance and
+            # boundary F1 against the ground truth are computed by
+            # evaluate_structure_baseline.py from the JAMS outputs.
+
+            # Homogeneity with convolitonal block-matching (CBM) and regularity penalty
+            cbm_scores = np.array([
+                cbm_segment_score(matrix, start_idx, end_idx, return_homogeneity_penalty=True)
+                for start_idx, end_idx in zip(boundary_indices[:-1], boundary_indices[1:])
+            ])
+            cbm_mean_scores = np.mean(cbm_scores, axis=0) if cbm_scores.size else np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+            segment_metrics = [
+                {
+                    "cbm_score": float(score[0]),
+                    "homogeneity_score": float(score[1]),
+                    "penalty_score": float(score[2]),
                 }
+                for score in cbm_scores
+            ]
 
-                # Regularity metrics
-                regularity_metrics = segmentation_regularity_metrics(segments)
+            cbm_metrics = {
+                "cbm_score_mean": float(cbm_mean_scores[0]),
+                "homogeneity_mean_score": float(cbm_mean_scores[1]),
+                "penalty_mean_score": float(cbm_mean_scores[2]),
+            }
 
-                segmentation_metrics = segmentation_boundary_metrics(ref_segments, segments)
-
-                metrics = {**cbm_metrics, **regularity_metrics, **segmentation_metrics}
-                jams_path = experiment_dir / run_slug / f"{track_id}.jams"
-                write_jams(
-                    jams_path,
-                    audio_path,
-                    duration,
-                    algorithm,
-                    resolved_features,
-                    boundary_times,
-                    metrics,
-                    segment_metrics,
-                    ref_segments,
-                )
-                rows.append(
-                    {
-                        "track_id": track_id,
-                        "algorithm": slug,
-                        "ssm_run": ssm_label,
-                        "ssm_features": ",".join(resolved_features),
-                        "status": "ok",
-                        "duration_s": round(duration, 6),
-                        "n_ssm_frames": int(n_frames),
-                        "n_boundaries": len(boundary_times),
-                        "elapsed_s": round(time.perf_counter() - start_time, 3),
-                        "features_npz": str(feature_npz),
-                        "jams": str(jams_path),
-                        **{key: float(value) for key, value in metrics.items()},
-                    }
-                )
+            metrics = cbm_metrics
+            jams_path = experiment_dir / run_slug / f"{track_id}.jams"
+            write_jams(
+                jams_path,
+                audio_path,
+                duration,
+                algorithm,
+                resolved_features,
+                boundary_times,
+                metrics,
+                segment_metrics,
+                ref_segments,
+            )
+            rows.append(
+                {
+                    "track_id": track_id,
+                    "algorithm": slug,
+                    "ssm_run": ssm_label,
+                    "ssm_features": ",".join(resolved_features),
+                    "status": "ok",
+                    "duration_s": round(duration, 6),
+                    "n_ssm_frames": int(n_frames),
+                    "n_boundaries": len(boundary_times),
+                    "elapsed_s": round(time.perf_counter() - start_time, 3),
+                    "features_npz": features_npz,
+                    "jams": str(jams_path),
+                    **{key: float(value) for key, value in metrics.items()},
+                }
+            )
     return rows
 
 
@@ -409,39 +432,53 @@ def main(argv: Iterable[str] | None = None) -> int:
     # is run and reported separately (see `build_ssm_runs`).
     ssm_runs = build_ssm_runs(ssm_features, fusion_combos)
 
-    if feature_dir is None:
-        if audio_dir is None:
-            raise SystemExit("Set `segmentation.feature_dir` or `audio_dir` in the YAML config.")
-        feature_dir = Path(raw_config.get("out_dir", experiment_dir / "features"))
-        feature_paths: list[Path] = []
-    else:
-        feature_paths = list_feature_files(feature_dir, limit)
+    feature_paths = list_feature_files(feature_dir, limit) if feature_dir is not None else []
 
-    if not feature_paths:
-        # No precomputed *_features.npz available: fall back to extracting
-        # them at runtime from the audio files pointed to by the config.
+    # Each job is (display name, runner returning the summary rows for one track).
+    jobs: list[tuple[str, Callable[[], list[dict[str, Any]]]]] = []
+    if feature_paths:
+        for feature_npz in feature_paths:
+            jobs.append(
+                (
+                    feature_npz.name,
+                    lambda npz=feature_npz: process_feature_file(npz, experiment_dir, algorithms, ssm_runs, fusion_cfg),
+                )
+            )
+    else:
+        # No precomputed *_features.npz available: extract them at runtime from
+        # the audio files pointed to by the config. They are only saved to disk
+        # when `out_dir` is set; otherwise they are used in memory and discarded.
         if audio_dir is None:
+            location = f"in {feature_dir} " if feature_dir is not None else ""
             raise SystemExit(
-                f"No *_features.npz files found in {feature_dir} and no `audio_dir` "
+                f"No *_features.npz files found {location}and no `audio_dir` "
                 "configured in the YAML to compute them from."
             )
         feature_cfg = build_feature_config(args, raw_config)
         audio_paths = list_audio_files(audio_dir, limit)
         if not audio_paths:
             raise SystemExit(f"No audio files found in {audio_dir}")
-        print(
-            f"No precomputed features found in {feature_dir}; extracting from audio in {audio_dir}...",
-            flush=True,
-        )
-        feature_paths = [ensure_features(audio_path, feature_dir, feature_cfg) for audio_path in audio_paths]
+        out_dir = Path(raw_config["out_dir"]) if raw_config.get("out_dir") else None
+        target = f"saving them to {out_dir}" if out_dir is not None else "without saving them to disk"
+        print(f"No precomputed features found; extracting from audio in {audio_dir} ({target})...", flush=True)
+
+        def run_from_audio(audio_path: Path) -> list[dict[str, Any]]:
+            if out_dir is not None:
+                feature_npz = ensure_features(audio_path, out_dir, feature_cfg)
+                return process_feature_file(feature_npz, experiment_dir, algorithms, ssm_runs, fusion_cfg)
+            data = compute_features_in_memory(audio_path, feature_cfg)
+            return process_feature_data(data, "", experiment_dir, algorithms, ssm_runs, fusion_cfg)
+
+        for audio_path in audio_paths:
+            jobs.append((audio_path.name, lambda path=audio_path: run_from_audio(path)))
 
     rows: list[dict[str, Any]] = []
-    for idx, feature_npz in enumerate(feature_paths, start=1):
-        print(f"[{idx:03d}/{len(feature_paths):03d}] {feature_npz.name}", flush=True)
+    for idx, (name, run_job) in enumerate(jobs, start=1):
+        print(f"[{idx:03d}/{len(jobs):03d}] {name}", flush=True)
         try:
-            rows.extend(process_feature_file(feature_npz, experiment_dir, algorithms, ssm_runs, fusion_cfg))
+            rows.extend(run_job())
         except Exception as exc:
-            rows.append({"features_npz": str(feature_npz), "status": "error", "error": repr(exc)})
+            rows.append({"track": name, "status": "error", "error": repr(exc)})
             write_summary(experiment_dir, rows)
             raise
         write_summary(experiment_dir, rows)
