@@ -13,6 +13,7 @@ import numpy as np
 import soundfile as sf
 
 from data_loading import FeatureConfig
+from segmentation.grid import downbeats_on_beat_grid
 
 try:
     import madmom as mm  # noqa: F401
@@ -36,6 +37,17 @@ except Exception as exc:
 
 def safe_nan_to_num(x: np.ndarray) -> np.ndarray:
     return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def downbeat_boundaries_on_beat_grid(downbeat_times: np.ndarray, beat_boundaries: np.ndarray) -> np.ndarray:
+    """Downbeats snapped to the (regularized) beat grid, so every bar is a whole number of beats.
+
+    Downbeats must not go through `regularize_beat_boundaries`: its gap filling
+    assumes beat-length intervals (0.25-2 s), so on bars it inserts fake
+    downbeats at beat rate. Bars shorter than 2 beats are merged.
+    """
+    bar_idx = downbeats_on_beat_grid(safe_nan_to_num(np.asarray(downbeat_times)), beat_boundaries)
+    return np.asarray(beat_boundaries)[bar_idx]
 
 
 def regularize_beat_boundaries(boundaries: np.ndarray, duration: float) -> np.ndarray:
@@ -85,13 +97,9 @@ def estimate_beats_and_downbeats(y: np.ndarray, cfg: FeatureConfig) -> tuple[np.
         act_downbeats = dbt.RNNDownBeatProcessor()(y)
         proc_downbeats = dbt.DBNDownBeatTrackingProcessor(beats_per_bar=[3, 4], fps=100)
         song_beats = proc_downbeats(act_downbeats)
-        downbeat_times = [song_beats[0][0]]
-        for beat in song_beats[1:]:
-            if beat[1] == 1:
-                downbeat_times.append(beat[0])
-        downbeat_times.append(duration)
-        downbeat_boundaries = np.unique(np.r_[0.0, downbeat_times, duration])
-        downbeat_boundaries = regularize_beat_boundaries(downbeat_boundaries, duration)
+        # The bar grid always starts at 0, so a pickup before the first downbeat is its own bar.
+        downbeat_times = [beat[0] for beat in song_beats if beat[1] == 1]
+        downbeat_boundaries = downbeat_boundaries_on_beat_grid(np.asarray(downbeat_times), beat_boundaries)
         return beat_boundaries.astype(np.float32), downbeat_boundaries.astype(np.float32)
 
     if method == "beat_this":
@@ -109,11 +117,9 @@ def estimate_beats_and_downbeats(y: np.ndarray, cfg: FeatureConfig) -> tuple[np.
             )
             beats, downbeats = file2beats(handle.name)
         beat_times = np.asarray(beats)
-        downbeat_times = np.asarray(downbeats.tolist() + [beats[-1]])
         beat_boundaries = np.unique(np.r_[0.0, beat_times, duration])
         beat_boundaries = regularize_beat_boundaries(beat_boundaries, duration)
-        downbeat_boundaries = np.unique(np.r_[0.0, downbeat_times, duration])
-        downbeat_boundaries = regularize_beat_boundaries(downbeat_boundaries, duration)
+        downbeat_boundaries = downbeat_boundaries_on_beat_grid(np.asarray(downbeats), beat_boundaries)
         return beat_boundaries.astype(np.float32), downbeat_boundaries.astype(np.float32)
 
     raise ValueError(f"Unknown beat tracking method: {method}")

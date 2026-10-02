@@ -5,7 +5,9 @@ frame indices that index the beat-synchronous grid (and always include ``0`` and
 ``n_frames``):
 
 * **SSM-based** (``cbm``, ``foote``, ``sf``) consume a precomputed, normalized
-  self-similarity matrix (see :func:`segmentation.ssm.normalize_ssm`).
+  self-similarity matrix (see :func:`segmentation.ssm.normalize_ssm`). CBM is a
+  bar-wise algorithm: by default (``params.grid: bar``) it runs on a bar-level
+  SSM pooled from the beat SSM and its boundaries are mapped back to beats.
 * **Feature-based** (``scluster`` Laplacian spectral clustering) ignore the SSM
   and instead read beat-synchronous feature arrays from the loaded ``.npz``.
 
@@ -20,6 +22,7 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 import scipy
 
+from .grid import beat_ssm_to_bar_ssm
 from .loaders import (
     load_as_seg_cbm_module,
     load_msaf_cbm_module,
@@ -27,6 +30,7 @@ from .loaders import (
     load_msaf_scluster_module,
     load_msaf_sf_module,
 )
+from .ssm import normalize_ssm
 
 # Algorithm ids accepted by :func:`run_algorithm`, grouped by family.
 SUPPORTED_ALGORITHMS = (
@@ -60,7 +64,34 @@ def normalize_algorithms(items: Iterable[Any] | None) -> list[dict[str, Any]]:
     return algorithms
 
 
-def cbm_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
+def cbm_boundaries(
+    matrix: np.ndarray, algorithm: dict[str, Any], bar_indices: np.ndarray | None = None
+) -> list[int]:
+    """Correlation Block-Matching (Marmoret et al., TISMIR 2023).
+
+    CBM is designed for bar-wise SSMs: `min_size`, `max_size`, the `modulo8`
+    penalty and the size-8 score normalization are all in bars. With
+    ``params.grid: bar`` (default) the beat SSM is pooled into a bar SSM using
+    `bar_indices` (bar starts as beat indices, see
+    :func:`segmentation.grid.bar_beat_indices`), CBM runs there, and its bar
+    boundaries are returned as beat indices. ``grid: beat`` runs CBM directly on
+    the beat SSM (sizes are then in beats).
+    """
+    params = dict(algorithm.get("params", {}))
+    grid = str(params.get("grid", "bar")).lower()
+    if grid not in {"bar", "beat"}:
+        raise ValueError(f"CBM `grid` must be 'bar' or 'beat', got {grid!r}.")
+    if grid == "beat":
+        return _cbm_on_ssm(matrix, algorithm)
+    if bar_indices is None:
+        raise ValueError("Bar-wise CBM (`grid: bar`) needs the bar grid (`bar_indices`).")
+    bar_indices = np.asarray(bar_indices, dtype=int)
+    bar_matrix = normalize_ssm(beat_ssm_to_bar_ssm(matrix, bar_indices))
+    bar_bounds = _cbm_on_ssm(bar_matrix, algorithm)
+    return [int(bar_indices[idx]) for idx in bar_bounds]
+
+
+def _cbm_on_ssm(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
     source = str(algorithm.get("source", "as_seg")).lower()
     if source == "msaf":
         cbm = load_msaf_cbm_module()
@@ -111,8 +142,9 @@ def sf_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
     offset_thres = float(params.get("offset_thres", 0.05))
 
     lag = sf.circular_shift(matrix.astype(np.float64, copy=False))
-    structural = sf.gaussian_filter(lag.T, M=m_gaussian, axis=1)
-    structural = sf.gaussian_filter(lag.T, M=1, axis=0)
+    # MSAF's gaussian_filter works in place, so its two consecutive calls on
+    # `L.T` apply both filters; chain them explicitly here.
+    structural = sf.gaussian_filter(sf.gaussian_filter(lag.T, M=m_gaussian, axis=1), M=1, axis=0)
     novelty_curve = sf.compute_nc(structural)
     peaks = sf.pick_peaks(novelty_curve, L=mp_adaptive, offset_denom=offset_thres)
     return [0, *map(int, peaks), matrix.shape[0]]
@@ -120,6 +152,12 @@ def sf_boundaries(matrix: np.ndarray, algorithm: dict[str, Any]) -> list[int]:
 def scluster_boundaries(
     matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any], feature: str
 ) -> list[int]:
+    return scluster_segmentation(matrix, algorithm, features, feature)[0]
+
+
+def scluster_segmentation(
+    matrix: np.ndarray, algorithm: dict[str, Any], features: Mapping[str, Any], feature: str
+) -> tuple[list[int], list[str]]:
     """Laplacian spectral-clustering segmentation (McFee & Ellis, 2014).
 
     This algorithm does not use the SSM; it builds its own recurrence and path
@@ -144,11 +182,17 @@ def scluster_boundaries(
     n_frames = matrix.shape[0]
     feature_array = _select_feature(features, feature, n_frames)
 
-    est_idxs, _est_labels, _cnorm = scluster.do_segmentation(feature_array, feature_array, config, None)
-    # MSAF closes the list with the last beat index (n_frames - 1); replace it
-    # with n_frames and drop duplicates so no empty/1-beat tail segment appears.
-    inner = {int(idx) for idx in np.asarray(est_idxs)[:-1] if 0 < int(idx) < n_frames}
-    return [0, *sorted(inner), n_frames]
+    est_idxs, est_labels, _cnorm = scluster.do_segmentation(feature_array, feature_array, config, None)
+    # MSAF closes the list with the last beat index (n_frames - 1) and gives one
+    # cluster label per segment start. Replace the closing index with n_frames
+    # and drop a 1-beat tail segment starting at n_frames - 1 (merged into the
+    # previous one), keeping each surviving segment's label.
+    label_by_start = {int(idx): f"C{int(label)}" for idx, label in zip(np.asarray(est_idxs)[:-1], est_labels)}
+    starts = sorted(idx for idx in label_by_start if 0 <= idx < n_frames - 1)
+    if not starts or starts[0] != 0:
+        starts.insert(0, 0)
+    labels = [label_by_start.get(start, label_by_start.get(0, "C0")) for start in starts]
+    return [*starts, n_frames], labels
 
 def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) -> np.ndarray:
     """Return a ``(n_dims, n_frames)`` feature array from the loaded ``.npz``.
@@ -174,10 +218,10 @@ def _select_feature(features: Mapping[str, Any], requested: str, n_frames: int) 
     elif array.shape[0] == n_frames:
         array = array.T
     else:
-        # Interpolate time dimention to match n_frames
+        # Feature arrays are stored as (n_dims, n_time): resample the time axis to n_frames.
         array = scipy.interpolate.interp1d(
-            np.linspace(0, 1, num=array.shape[0]), array, axis=0, kind="nearest", fill_value="extrapolate"
-        )(np.linspace(0, 1, num=n_frames)).T
+            np.linspace(0, 1, num=array.shape[1]), array, axis=1, kind="nearest", fill_value="extrapolate"
+        )(np.linspace(0, 1, num=n_frames))
     return array
 
 def run_algorithm(
@@ -185,12 +229,35 @@ def run_algorithm(
     algorithm: dict[str, Any],
     features: Mapping[str, Any] | None = None,
     feature: str | None = None,
-) -> list[int]:
+    return_labels: bool = False,
+    bar_indices: np.ndarray | None = None,
+) -> list[int] | tuple[list[int], list[str] | None]:
+    """Run one algorithm and return its boundary indices.
+
+    With ``return_labels=True`` returns ``(boundaries, labels)``, where
+    ``labels`` has one entry per segment for algorithms that label segments
+    (``scluster``) and is ``None`` for boundary-only algorithms. `bar_indices`
+    (bar starts as beat indices) is used by bar-wise CBM.
+    """
+    labels: list[str] | None = None
+    boundaries = _run_algorithm(matrix, algorithm, features, feature, bar_indices)
+    if isinstance(boundaries, tuple):
+        boundaries, labels = boundaries
+    return (boundaries, labels) if return_labels else boundaries
+
+
+def _run_algorithm(
+    matrix: np.ndarray,
+    algorithm: dict[str, Any],
+    features: Mapping[str, Any] | None,
+    feature: str | None,
+    bar_indices: np.ndarray | None,
+) -> list[int] | tuple[list[int], list[str]]:
     algorithm_id = str(algorithm["id"]).lower()
     if algorithm_id in {"cbm", "as_seg_cbm", "msaf_cbm"}:
         if algorithm_id == "msaf_cbm" and "source" not in algorithm:
             algorithm = {**algorithm, "source": "msaf"}
-        return cbm_boundaries(matrix, algorithm)
+        return cbm_boundaries(matrix, algorithm, bar_indices)
     if algorithm_id in {"foote", "msaf_foote"}:
         return foote_boundaries(matrix, algorithm)
     if algorithm_id in {"sf", "msaf_sf"}:
@@ -200,7 +267,7 @@ def run_algorithm(
             raise ValueError(
                 f"Algorithm {algorithm['id']!r} requires the loaded feature arrays and a single feature name."
             )
-        return scluster_boundaries(matrix, algorithm, features, feature)
+        return scluster_segmentation(matrix, algorithm, features, feature)
     raise ValueError(
         f"Unsupported segmentation algorithm {algorithm['id']!r}. "
         f"Supported ids: {', '.join(SUPPORTED_ALGORITHMS)}."

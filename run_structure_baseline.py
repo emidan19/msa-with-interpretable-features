@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -21,7 +22,7 @@ import numpy as np
 import yaml
 
 from msa_metrics import Segment, cbm_segment_score
-from segmentation import build_ssm_runs, normalize_algorithms, resolve_segmentation_ssm, run_algorithm
+from segmentation import bar_beat_indices, build_ssm_runs, normalize_algorithms, resolve_segmentation_ssm, run_algorithm
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -31,7 +32,7 @@ AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aiff", ".aif")
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default="/home/emartinez/emilio/maestria/tesis/msa/MSA-with-Interpretable-Features/msa_feature_config.template.yaml", help="YAML config path.")
+    parser.add_argument("--config", type=Path, default=None, help="YAML config path.")
     parser.add_argument("--audio-dir", type=Path, default=None, help="Folder of audio files for online extraction.")
     parser.add_argument("--feature-dir", type=Path, default=None, help="Folder containing *_features.npz files.")
     parser.add_argument("--experiment-dir", type=Path, default=None, help="Folder where JAMS outputs are written.")
@@ -144,30 +145,56 @@ def compute_features_in_memory(audio_path: Path, cfg: FeatureConfig) -> InMemory
     return InMemoryFeatures(payload)
 
 
-def frame_index_to_times(indices: Iterable[int], n_frames: int, beat_boundaries: np.ndarray, duration: float) -> list[float]:
-    idxs = sorted({int(idx) for idx in indices if int(idx) >= 0})
-    normalized = []
-    for idx in idxs:
-        normalized.append(n_frames if idx >= n_frames - 1 else idx)
-    normalized = sorted({0, n_frames, *normalized})
-    if beat_boundaries.size >= n_frames + 1:
-        times = [float(beat_boundaries[min(idx, beat_boundaries.size - 1)]) for idx in normalized]
+def normalize_boundary_indices(indices: Iterable[int], n_frames: int) -> list[int]:
+    """Sorted, unique boundary indices that always start at 0 and end at n_frames.
+
+    An index at n_frames - 1 is moved to n_frames so no 1-frame tail segment is
+    produced. Both the boundary times and the per-segment metrics are computed
+    from this single list, so segment i means the same interval everywhere.
+    """
+    idxs = {min(int(idx), n_frames) for idx in indices if int(idx) >= 0}
+    idxs = {n_frames if idx >= n_frames - 1 else idx for idx in idxs}
+    return sorted({0, n_frames, *idxs})
+
+
+def frame_index_to_times(normalized_indices: list[int], n_frames: int, beat_boundaries: np.ndarray, duration: float) -> list[float]:
+    """Map normalized SSM indices to seconds (one time per index, same order).
+
+    SSMs are beat-synchronous: SSM index i is the interval
+    [beat_boundaries[i], beat_boundaries[i + 1]), so the grid must have exactly
+    n_frames + 1 boundaries. Any other size means the SSM is on a different
+    grid, and mapping it onto the beats would shift every boundary silently.
+    """
+    if beat_boundaries.size:
+        if beat_boundaries.size != n_frames + 1:
+            raise ValueError(
+                f"SSM has {n_frames} frames but the beat grid has {beat_boundaries.size} boundaries "
+                f"(expected {n_frames + 1}); the SSM is not on the stored beat grid."
+            )
+        times = [float(beat_boundaries[idx]) for idx in normalized_indices]
     else:
-        times = [float(duration) * idx / max(1, n_frames) for idx in normalized]
+        times = [float(duration) * idx / max(1, n_frames) for idx in normalized_indices]
     times[0] = 0.0
     times[-1] = float(duration)
-    return sorted({round(time_value, 6) for time_value in times})
+    return [round(time_value, 6) for time_value in times]
 
 
-def annotation_intervals(boundary_times: list[float], segment_metrics: list[dict[str, float]] | None = None) -> list[dict[str, Any]]:
+def annotation_intervals(
+    boundary_times: list[float],
+    segment_metrics: list[dict[str, float]] | None = None,
+    segment_labels: list[str] | None = None,
+) -> list[dict[str, Any]]:
     intervals = []
     for idx, (start, end) in enumerate(zip(boundary_times[:-1], boundary_times[1:])):
         if end <= start:
             continue
+        # Boundary-only algorithms get unique placeholder labels (S01, S02, ...);
+        # labeling algorithms (scluster) keep their cluster labels.
+        label = segment_labels[idx] if segment_labels is not None else f"S{idx + 1:02d}"
         interval = {
             "time": float(start),
             "duration": float(end - start),
-            "value": {"label": f"S{idx + 1:02d}"},
+            "value": {"label": label},
             "confidence": None,
         }
         if segment_metrics is not None and idx < len(segment_metrics):
@@ -199,6 +226,7 @@ def write_jams(
     metrics: dict[str, float],
     segment_metrics: list[dict[str, float]] | None = None,
     reference_segments: list[Segment] | None = None,
+    segment_labels: list[str] | None = None,
 ) -> None:
     annotation = {
         "namespace": "segment_open",
@@ -208,9 +236,10 @@ def write_jams(
             "data_source": "run_structure_baseline.py",
             "annotation_tools": f"{algorithm.get('source', 'as_seg')}:{algorithm['id']}",
         },
-        "data": annotation_intervals(boundary_times, segment_metrics),
+        "data": annotation_intervals(boundary_times, segment_metrics, segment_labels),
         "sandbox": {
             "kind": "estimate",
+            "labeled": segment_labels is not None,
             "boundary_times": boundary_times,
             "ssm_features": ssm_features,
             "algorithm": algorithm,
@@ -253,10 +282,23 @@ def write_jams(
     output_path.write_text(json.dumps(jams_payload, indent=2), encoding="utf-8")
 
 
+def uses_bar_grid(algorithm: dict[str, Any]) -> bool:
+    """True for CBM runs on the bar grid (the default for CBM)."""
+    is_cbm = str(algorithm["id"]).lower() in {"cbm", "as_seg_cbm", "msaf_cbm"}
+    return is_cbm and str(dict(algorithm.get("params", {})).get("grid", "bar")).lower() == "bar"
+
+
 def algorithm_slug(algorithm: dict[str, Any]) -> str:
-    source = str(algorithm.get("source", "as_seg" if str(algorithm["id"]).lower() == "cbm" else "msaf"))
-    algorithm_id = str(algorithm["id"])
-    slug = algorithm_id if algorithm_id.startswith(f"{source}_") else f"{source}_{algorithm_id}"
+    """Output folder prefix: `name` if given, else `<source>_<id>` (+ `_beat` for beat-wise CBM)."""
+    if algorithm.get("name"):
+        slug = str(algorithm["name"])
+    else:
+        source = str(algorithm.get("source", "as_seg" if str(algorithm["id"]).lower() == "cbm" else "msaf"))
+        algorithm_id = str(algorithm["id"])
+        slug = algorithm_id if algorithm_id.startswith(f"{source}_") else f"{source}_{algorithm_id}"
+        is_cbm = str(algorithm["id"]).lower() in {"cbm", "as_seg_cbm", "msaf_cbm"}
+        if is_cbm and not uses_bar_grid(algorithm):
+            slug += "_beat"
     return slug.replace("/", "_").replace(" ", "_")
 
 
@@ -284,22 +326,34 @@ def process_feature_data(
     `features_npz` is the npz path recorded in the summary ("" if not on disk).
     """
     rows = []
-    base_duration = float(np.asarray(data["duration"]).item()) if "duration" in data else None
     sections = np.asarray(data["sections"]) if "sections" in data else None
     beat_boundaries = np.asarray(data["beat_boundaries"]) if "beat_boundaries" in data else np.array([])
     audio_path = str(np.asarray(data["audio_path"]).item()) if "audio_path" in data else Path(features_npz).stem
     track_id = Path(audio_path).stem
+    if "duration" in data:
+        duration = float(np.asarray(data["duration"]).item())
+    elif beat_boundaries.size:
+        duration = float(beat_boundaries[-1])
+    else:
+        raise ValueError(f"{features_npz or track_id}: no `duration` or `beat_boundaries` to map SSM frames to seconds.")
 
-    # Reference segments (if available); independent of the SSM run.
+    # Bar grid (bar starts as beat indices) for bar-wise CBM; SSMs stay beat-wise.
+    bar_indices, bar_grid_source = None, ""
+    if beat_boundaries.size and any(uses_bar_grid(algorithm) for algorithm in algorithms):
+        downbeats = np.asarray(data["beat_downbeat_boundaries"]) if "beat_downbeat_boundaries" in data else None
+        bar_indices, bar_grid_source = bar_beat_indices(beat_boundaries, downbeats, label=track_id)
+
+    # Reference segments (if available); independent of the SSM run. Keep the
+    # original section labels so repeated sections (e.g. two choruses) share a
+    # label, as label-based metrics expect.
     ref_segments = [
-        Segment(start=float(start), end=float(end), label=f"{idx} : {label}")
-        for idx, (start, end, label) in enumerate(sections if sections is not None else [])
+        Segment(start=float(start), end=float(end), label=str(label))
+        for start, end, label in (sections if sections is not None else [])
     ]
 
     for ssm_label, ssm_feature_list in ssm_runs:
         matrix, resolved_features = resolve_segmentation_ssm(data, ssm_feature_list, fusion_cfg)
         n_frames = matrix.shape[0]
-        duration = base_duration if base_duration is not None else float(n_frames)
         # If this run fused multiple SSMs with GraphDitty, save the fused
         # SSM to the experiment folder so it can be inspected later, under
         # <experiment_dir>/fusion_ssms/<track_id>__<ssm_label>_fused_ssm.npz
@@ -328,21 +382,35 @@ def process_feature_data(
             # only run on single-feature runs (not on GraphDitty fusions).
             if is_scluster and len(resolved_features) != 1:
                 continue
+            # Run segmentation algo (timed alone, without metrics / JAMS writing).
             start_time = time.perf_counter()
-            # Run segmentation algo
             if is_scluster:
-                boundary_indices = run_algorithm(matrix, algorithm, data, feature=resolved_features[0])
+                raw_indices, raw_labels = run_algorithm(
+                    matrix, algorithm, data, feature=resolved_features[0], return_labels=True
+                )
             else:
-                boundary_indices = run_algorithm(matrix, algorithm)
-            # Convert frame indices to times, using beat boundaries if available.
+                raw_indices, raw_labels = run_algorithm(
+                    matrix, algorithm, return_labels=True, bar_indices=bar_indices
+                )
+            elapsed_s = time.perf_counter() - start_time
+
+            # Normalize once; times, labels and per-segment metrics all use these indices.
+            boundary_indices = normalize_boundary_indices(raw_indices, n_frames)
             boundary_times = frame_index_to_times(boundary_indices, n_frames, beat_boundaries, duration)
+            segment_labels = None
+            if raw_labels is not None:
+                label_by_start = dict(zip((int(idx) for idx in raw_indices[:-1]), raw_labels))
+                segment_labels = [label_by_start.get(start, "") for start in boundary_indices[:-1]]
 
             ### Compute metrics
             # Only SSM-based metrics are computed here; regularity/balance and
             # boundary F1 against the ground truth are computed by
             # evaluate_structure_baseline.py from the JAMS outputs.
 
-            # Homogeneity with convolitonal block-matching (CBM) and regularity penalty
+            # Homogeneity with convolutional block-matching (CBM) and regularity penalty.
+            # Diagnostic only: CBM optimizes this very score on the same SSM, so it
+            # is biased towards the CBM algorithm and must not be used to rank
+            # algorithms against each other.
             cbm_scores = np.array([
                 cbm_segment_score(matrix, start_idx, end_idx, return_homogeneity_penalty=True)
                 for start_idx, end_idx in zip(boundary_indices[:-1], boundary_indices[1:])
@@ -376,6 +444,7 @@ def process_feature_data(
                 metrics,
                 segment_metrics,
                 ref_segments,
+                segment_labels,
             )
             rows.append(
                 {
@@ -386,8 +455,14 @@ def process_feature_data(
                     "status": "ok",
                     "duration_s": round(duration, 6),
                     "n_ssm_frames": int(n_frames),
-                    "n_boundaries": len(boundary_times),
-                    "elapsed_s": round(time.perf_counter() - start_time, 3),
+                    "n_segments": len(boundary_times) - 1,
+                    # Internal boundaries only (excludes 0 and the track end), comparable to the GT count.
+                    "n_boundaries": len(boundary_times) - 2,
+                    "n_ref_boundaries": max(0, len(ref_segments) - 1),
+                    "elapsed_s": round(elapsed_s, 3),
+                    "grid": "bar" if uses_bar_grid(algorithm) else "beat",
+                    "bar_grid_source": bar_grid_source if uses_bar_grid(algorithm) else "",
+                    "n_bars": len(bar_indices) - 1 if uses_bar_grid(algorithm) and bar_indices is not None else "",
                     "features_npz": features_npz,
                     "jams": str(jams_path),
                     **{key: float(value) for key, value in metrics.items()},
@@ -423,6 +498,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     limit = args.limit if args.limit is not None else raw_config.get("limit")
     limit = int(limit) if limit is not None else None
     algorithms = normalize_algorithms(segmentation_cfg.get("algorithms"))
+    slugs = [algorithm_slug(algorithm) for algorithm in algorithms]
+    duplicated = sorted({slug for slug in slugs if slugs.count(slug) > 1})
+    if duplicated:
+        raise SystemExit(
+            f"Several algorithms write to the same output folder ({', '.join(duplicated)}); "
+            "give them distinct `name` fields in `segmentation.algorithms`."
+        )
     ssm_features = list(segmentation_cfg.get("ssm_features", ["fused"]))
     fusion_cfg = dict(segmentation_cfg.get("graphditty_fusion", {}))
     fusion_combos = fusion_cfg.get("features") or []
@@ -473,17 +555,22 @@ def main(argv: Iterable[str] | None = None) -> int:
             jobs.append((audio_path.name, lambda path=audio_path: run_from_audio(path)))
 
     rows: list[dict[str, Any]] = []
+    failed: list[str] = []
     for idx, (name, run_job) in enumerate(jobs, start=1):
         print(f"[{idx:03d}/{len(jobs):03d}] {name}", flush=True)
         try:
             rows.extend(run_job())
         except Exception as exc:
-            rows.append({"track": name, "status": "error", "error": repr(exc)})
-            write_summary(experiment_dir, rows)
-            raise
+            # Record the failure and keep going with the remaining tracks.
+            traceback.print_exc()
+            rows.append({"track_id": name, "status": "error", "error": repr(exc)})
+            failed.append(name)
         write_summary(experiment_dir, rows)
 
     print(json.dumps(rows, indent=2))
+    if failed:
+        print(f"{len(failed)} of {len(jobs)} track(s) failed: {', '.join(failed)}", flush=True)
+        return 1
     return 0
 
 

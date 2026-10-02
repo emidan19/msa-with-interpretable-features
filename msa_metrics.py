@@ -572,9 +572,15 @@ def segmentation_boundary_metrics(
     estimated_segments: Iterable[Segment | Sequence[float]],
     *,
     boundary_windows: Sequence[float] = (0.5, 3.0),
+    trim: bool = True,
 ) -> dict[str, float]:
     """
     Compute boundary-based segmentation metrics from segment intervals.
+
+    With ``trim=True`` (MSAF / MIREX convention) the first and last boundaries,
+    i.e. the track start and end, are discarded before matching; both
+    segmentations always contain them, so keeping them inflates precision and
+    recall.
     """
 
     ref = coerce_segments(reference_segments)
@@ -608,6 +614,7 @@ def segmentation_boundary_metrics(
             ref_intervals,
             est_intervals,
             window=float(window),
+            trim=trim,
         )
 
         suffix = str(window).replace(".", "_")
@@ -629,6 +636,7 @@ def segmentation_boundary_metrics(
         dev_ref_to_est, dev_est_to_ref = mir_eval.segment.deviation(
             ref_intervals,
             est_intervals,
+            trim=trim,
         )
 
         result.update(
@@ -654,14 +662,15 @@ def boundary_hit_vector(
     estimated_segments: Iterable[Segment | Sequence[float]],
     *,
     window: float = 0.5,
+    trim: bool = True,
 ) -> np.ndarray:
     """
     Binary hit/miss vector over the reference boundaries.
 
     Entry i is 1 if reference boundary i is matched by an estimated boundary
-    within ``window`` seconds, else 0. Uses the same one-to-one matching as
-    ``mir_eval.segment.detection`` (trim=False), so ``hits.mean()`` equals the
-    boundary recall at that window.
+    within ``window`` seconds, else 0. Uses the same one-to-one matching and
+    ``trim`` convention as ``mir_eval.segment.detection``, so ``hits.mean()``
+    equals the boundary recall at that window.
     """
 
     ref = coerce_segments(reference_segments)
@@ -673,12 +682,16 @@ def boundary_hit_vector(
     ref_boundaries = mir_eval.util.intervals_to_boundaries(
         np.asarray([[seg.start, seg.end] for seg in ref], dtype=float)
     )
+    if trim:
+        ref_boundaries = ref_boundaries[1:-1]
     hits = np.zeros(len(ref_boundaries), dtype=int)
 
     if est:
         est_boundaries = mir_eval.util.intervals_to_boundaries(
             np.asarray([[seg.start, seg.end] for seg in est], dtype=float)
         )
+        if trim:
+            est_boundaries = est_boundaries[1:-1]
         for ref_idx, _ in mir_eval.util.match_events(ref_boundaries, est_boundaries, float(window)):
             hits[ref_idx] = 1
 
