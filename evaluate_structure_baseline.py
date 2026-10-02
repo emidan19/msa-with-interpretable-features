@@ -70,6 +70,7 @@ REGULARITY_BALANCE_METRICS = (
     "adjacent_regularity_absolute",
     "adjacent_balance_absolute",
 )
+LABELED_METRICS = ("labeled_regularity_absolute", "labeled_balance_absolute")
 BOUNDARY_WINDOWS = (0.5, 3.0)
 BOUNDARY_F1_METRICS = tuple(f"boundary_f_{str(window).replace('.', '_')}s" for window in BOUNDARY_WINDOWS)
 
@@ -200,6 +201,11 @@ def load_reference_segments_from_config(
     return [Segment(start=float(start), end=float(end), label=str(label)) for start, end, label in sections]
 
 
+def _has_repeated_labels(segments: list[Segment]) -> bool:
+    labels = [segment.label for segment in segments if segment.label]
+    return len(set(labels)) < len(labels)
+
+
 def evaluate_jams(
     jams_path: Path,
     sections_dir: Path | None,
@@ -222,6 +228,18 @@ def evaluate_jams(
     ref_metrics = segmentation_regularity_metrics(ref_segments)
     boundary_metrics = segmentation_boundary_metrics(ref_segments, est_segments, boundary_windows=BOUNDARY_WINDOWS)
     hits = {window: boundary_hit_vector(ref_segments, est_segments, window=window) for window in BOUNDARY_WINDOWS}
+
+    # Labeled metrics only average over same-label segment pairs. A segmentation
+    # without repeated labels (boundary-only algorithms label every segment
+    # uniquely as S01, S02, ...) has no such pairs and would score a
+    # meaningless 0, so those values are reported as NaN instead.
+    est_labeled = _has_repeated_labels(est_segments)
+    ref_labeled = _has_repeated_labels(ref_segments)
+    for metric in LABELED_METRICS:
+        if not est_labeled:
+            est_metrics[metric] = float("nan")
+        if not ref_labeled:
+            ref_metrics[metric] = float("nan")
 
     row: dict[str, float | str] = {"reference_source": reference_source}
     for metric in REGULARITY_BALANCE_METRICS:
@@ -317,6 +335,9 @@ def boundary_mutual_information(hit_index: HitIndex) -> tuple[pd.DataFrame, pd.D
                                 f"Skipping NMI for {track_id} ({algorithm}: {run_a} vs {run_b}): "
                                 "reference boundary counts differ."
                             )
+                            continue
+                        if hits_a.size == 0:
+                            # No internal reference boundaries (single-segment ground truth).
                             continue
                         nmi = float(normalized_mutual_info_score(hits_a, hits_b))
                         track_nmis.append(nmi)
