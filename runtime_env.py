@@ -21,3 +21,6 @@ def ensure_local_cache(root: str | os.PathLike[str] | None = None) -> Path:
 
 
 ensure_local_cache()
+# Lets the CUDA caching allocator grow segments instead of fragmenting the pool when
+# tracks of different lengths alternate. Read on first CUDA allocation, so set it early.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")

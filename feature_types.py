@@ -378,6 +378,28 @@ def extract_ssl_features(
             return waveform
         return torchaudio.functional.resample(waveform, sample_rate, target_sr)
 
+    try:
+        _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs)
+    finally:
+        # Return cached blocks (models + activations of this track) to the driver so the
+        # next track starts from a clean pool; costs a few ms, negligible vs. loading the models.
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+
+    if "mule" in requested:
+        wav_16k = _resample_if_needed(16000).squeeze(0).cpu().numpy().astype(np.float32)
+        outputs["mule"] = _extract_mule_embeddings(wav_16k, cfg)
+
+    return outputs
+
+
+def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs) -> None:
+    """Run the torch SSL models one at a time, dropping each model before loading the next."""
+    import os
+    import sys
+
+    import torch
+
     with torch.no_grad():
         if "musicfm" in requested:
             sys.path.insert(0, str(cfg.ssl_models_root))
@@ -392,6 +414,7 @@ def extract_ssl_features(
             musicfm.eval()
             emb = musicfm.get_latent(wav_24k, layer_ix=7)
             outputs["musicfm"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
+            del musicfm, emb, wav_24k
 
         if "muq" in requested:
             from muq import MuQ
@@ -400,6 +423,7 @@ def extract_ssl_features(
             muq = MuQ.from_pretrained(cfg.muq_model_name).to(device).eval()
             emb = muq(wav_24k, output_hidden_states=True)
             outputs["muq"] = emb.last_hidden_state.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
+            del muq, emb, wav_24k
 
         if "matpac" in requested:
             from matpac.model import get_matpac
@@ -412,17 +436,12 @@ def extract_ssl_features(
             ).to(device).eval()
             emb, _layer_results = matpac(wav_16k)
             outputs["matpac"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
+            del matpac, emb, _layer_results, wav_16k
 
         if "repcl" in requested:
             outputs["repcl"] = _extract_repcl_embeddings(
                 _resample_if_needed, cfg, device, beat_boundaries
             )
-
-    if "mule" in requested:
-        wav_16k = _resample_if_needed(16000).squeeze(0).cpu().numpy().astype(np.float32)
-        outputs["mule"] = _extract_mule_embeddings(wav_16k, cfg)
-
-    return outputs
 
 
 def _extract_mule_embeddings(y_16k: np.ndarray, cfg: FeatureConfig) -> np.ndarray:

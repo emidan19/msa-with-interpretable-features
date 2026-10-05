@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping
 _CACHE_ROOT = os.path.join(os.getcwd(), ".cache")
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(_CACHE_ROOT, "matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", os.path.join(_CACHE_ROOT, "xdg"))
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 for _cache_dir in (os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"]):
     os.makedirs(_cache_dir, exist_ok=True)
 
@@ -43,6 +44,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         "--beat-tracking-method",
         choices=["librosa", "beat_this", "madmom"],
         default=None,
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip tracks whose JAMS outputs already exist in the experiment dir for every algorithm / SSM run, "
+        "keeping their rows from the previous segmentation_summary.json.",
     )
     return parser.parse_args(argv)
 
@@ -471,6 +478,45 @@ def process_feature_data(
     return rows
 
 
+def expected_jams_paths(
+    track_id: str,
+    experiment_dir: Path,
+    algorithms: list[dict[str, Any]],
+    ssm_runs: list[tuple[str, list[str]]],
+) -> list[Path]:
+    """JAMS files `process_feature_data` writes for one track (same skip rules)."""
+    paths = []
+    for ssm_label, ssm_feature_list in ssm_runs:
+        for algorithm in algorithms:
+            is_scluster = str(algorithm["id"]).lower() in {"scluster", "msaf_scluster"}
+            if is_scluster and len(ssm_feature_list) != 1:
+                continue
+            paths.append(experiment_dir / f"{algorithm_slug(algorithm)}__{ssm_label}" / f"{track_id}.jams")
+    return paths
+
+
+def is_track_complete(track_id: str, experiment_dir: Path, algorithms, ssm_runs) -> bool:
+    """True if every expected JAMS for `track_id` exists and is valid JSON."""
+    for path in expected_jams_paths(track_id, experiment_dir, algorithms, ssm_runs):
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+    return True
+
+
+def load_previous_rows(experiment_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    """Successful rows from a previous segmentation_summary.json, grouped by track_id."""
+    summary_path = experiment_dir / "segmentation_summary.json"
+    if not summary_path.exists():
+        return {}
+    by_track: dict[str, list[dict[str, Any]]] = {}
+    for row in json.loads(summary_path.read_text(encoding="utf-8")):
+        if row.get("status") == "ok":
+            by_track.setdefault(str(row["track_id"]), []).append(row)
+    return by_track
+
+
 def write_summary(experiment_dir: Path, rows: list[dict[str, Any]]) -> None:
     experiment_dir.mkdir(parents=True, exist_ok=True)
     (experiment_dir / "segmentation_summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
@@ -516,13 +562,14 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     feature_paths = list_feature_files(feature_dir, limit) if feature_dir is not None else []
 
-    # Each job is (display name, runner returning the summary rows for one track).
-    jobs: list[tuple[str, Callable[[], list[dict[str, Any]]]]] = []
+    # Each job is (display name, track_id, runner returning the summary rows for one track).
+    jobs: list[tuple[str, str, Callable[[], list[dict[str, Any]]]]] = []
     if feature_paths:
         for feature_npz in feature_paths:
             jobs.append(
                 (
                     feature_npz.name,
+                    feature_npz.name.removesuffix("_features.npz"),
                     lambda npz=feature_npz: process_feature_file(npz, experiment_dir, algorithms, ssm_runs, fusion_cfg),
                 )
             )
@@ -552,11 +599,20 @@ def main(argv: Iterable[str] | None = None) -> int:
             return process_feature_data(data, "", experiment_dir, algorithms, ssm_runs, fusion_cfg)
 
         for audio_path in audio_paths:
-            jobs.append((audio_path.name, lambda path=audio_path: run_from_audio(path)))
+            jobs.append((audio_path.name, audio_path.stem, lambda path=audio_path: run_from_audio(path)))
 
+    previous_rows = load_previous_rows(experiment_dir) if args.resume else {}
     rows: list[dict[str, Any]] = []
     failed: list[str] = []
-    for idx, (name, run_job) in enumerate(jobs, start=1):
+    skipped = 0
+    for idx, (name, track_id, run_job) in enumerate(jobs, start=1):
+        if args.resume and is_track_complete(track_id, experiment_dir, algorithms, ssm_runs):
+            print(f"[{idx:03d}/{len(jobs):03d}] {name} (already done, skipping)", flush=True)
+            if track_id not in previous_rows:
+                print(f"  warning: no rows for {track_id} in the previous summary; it will be missing from it.", flush=True)
+            rows.extend(previous_rows.get(track_id, []))
+            skipped += 1
+            continue
         print(f"[{idx:03d}/{len(jobs):03d}] {name}", flush=True)
         try:
             rows.extend(run_job())
@@ -568,6 +624,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         write_summary(experiment_dir, rows)
 
     print(json.dumps(rows, indent=2))
+    if skipped:
+        print(f"Skipped {skipped} of {len(jobs)} track(s) already processed.", flush=True)
     if failed:
         print(f"{len(failed)} of {len(jobs)} track(s) failed: {', '.join(failed)}", flush=True)
         return 1
