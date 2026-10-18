@@ -24,7 +24,7 @@ from msa_principles import (
     extract_ssm_regions,
 )
 
-SIMILARITY_TYPES = ("cosine", "autocorrelation", "rbf")
+SIMILARITY_TYPES = ("cosine", "rbf")
 METRIC_NAMES = ("homogeneity", "repetition", "novelty")
 REGION_SCORE_NAMES = ("section_mean", "repetition_mean", "background_mean")
 
@@ -494,9 +494,9 @@ def run_comparison(
     target_dir = output_dir if output_dir is not None else project_dir / "experiments" / "msa_principles_measure" / "similarity_comparison_outputs"
     target_dir.mkdir(parents=True, exist_ok=True)
     results_df.to_csv(target_dir / "similarity_comparison_results.csv", index=False)
-    # Save combined per-song SSM SVGs (two rows per feature, one column per similarity type)
-    saved_ssm_paths = save_combined_ssm_svgs(npz_paths, target_dir, similarity_types=similarity_types, gamma=gamma)
-    print(f"Wrote {len(saved_ssm_paths)} combined SSM SVGs to {target_dir / 'SSMs'}")
+    # # Save combined per-song SSM SVGs (two rows per feature, one column per similarity type)
+    # saved_ssm_paths = save_combined_ssm_svgs(npz_paths, target_dir, similarity_types=similarity_types, gamma=gamma)
+    # print(f"Wrote {len(saved_ssm_paths)} combined SSM SVGs to {target_dir / 'SSMs'}")
     saved_paths = save_global_comparison_plots(results_df, target_dir)
     print(f"Wrote {len(saved_paths)} figures to {target_dir}")
     print(results_df.head().to_string(index=False))
