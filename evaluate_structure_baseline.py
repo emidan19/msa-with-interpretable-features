@@ -411,6 +411,25 @@ def plot_grouped_metric(
     values, not parts of a whole: a stacked total would sum to a meaningless
     number.
     """
+    n_groups = agg_df["ssm_run"].nunique()
+    fig, ax = plt.subplots(figsize=(max(6, 1.6 * n_groups), 5))
+    draw_grouped_metric(ax, agg_df, metric, algorithms, colors)
+    fig.tight_layout()
+
+    out_path = results_dir / f"{metric}.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def draw_grouped_metric(
+    ax: plt.Axes,
+    agg_df: pd.DataFrame,
+    metric: str,
+    algorithms: list[str],
+    colors: dict[str, str],
+) -> None:
+    """Draw the grouped bars of `plot_grouped_metric` on an existing axis."""
     pivot = agg_df.pivot(index="ssm_run", columns="algorithm", values=metric).reindex(columns=algorithms)
 
     n_groups = len(pivot.index)
@@ -418,7 +437,6 @@ def plot_grouped_metric(
     group_positions = np.arange(n_groups)
     bar_width = 0.8 / max(1, n_series)
 
-    fig, ax = plt.subplots(figsize=(max(6, 1.6 * n_groups), 5))
     top_value = 0.0
     for idx, algorithm in enumerate(algorithms):
         values = pivot[algorithm].to_numpy(dtype=float)
@@ -459,12 +477,6 @@ def plot_grouped_metric(
     ax.spines["right"].set_visible(False)
     if n_series > 1:
         ax.legend(title="algorithm", bbox_to_anchor=(1.02, 1.0), loc="upper left", borderaxespad=0.0, frameon=False)
-    fig.tight_layout()
-
-    out_path = results_dir / f"{metric}.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
 
 
 def plot_nmi_heatmap(nmi_summary: pd.DataFrame, algorithm: str, window: float, results_dir: Path) -> Path | None:

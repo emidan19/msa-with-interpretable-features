@@ -38,10 +38,11 @@ MANIFEST
 # Features and results
 feature_outputs/
 experiments/**
+!experiments/*.py
+!experiments/*.ipynb
 !experiments/msa_principles_measure/
-!/experiments/msa_principles_measure/by_similarity_function.py
-!/experiments/msa_principles_measure/distribution_validation.py
-
+!/experiments/msa_principles_measure/*.py
+!/experiments/msa_principles_measure/README.md
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
