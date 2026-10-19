@@ -96,20 +96,11 @@ The internal orchestration happens through `pipeline.py`, while
 `extract_msa_features.py` and `batch_extract_msa_features.py` are the public
 CLI entrypoints.
 
-## Smoke Test
+## MSA Principles Measures (LAMIR 2026)
 
-Generate a synthetic A/B/A example:
-
-```bash
-python extract_msa_features.py --demo --out-dir feature_outputs
-```
-
-This writes files such as:
-
-- `feature_outputs/demo_aba_song.wav`
-- `feature_outputs/demo_aba_song_features.npz`
-- `feature_outputs/demo_aba_song_summary.json`
-- `feature_outputs/demo_aba_song_preview.png`
+For the study of the MSA measures of homogeneity, repetition, and novelty,
+see the README at
+[experiments/msa_principles_measure/README.md](experiments/msa_principles_measure/README.md).
 
 ## Outputs
 
@@ -123,14 +114,41 @@ Each run can produce:
 
 ## Downstream Structure Baseline
 
-Run the current unsupervised downstream benchmark on extracted features:
+`run_structure_baseline.py` segments each track from its SSMs with the
+configured algorithms and writes one JAMS file per track, algorithm and SSM run.
+It also embeds the ground-truth segmentation (when available) in each JAMS, so
+`evaluate_structure_baseline.py` can score the outputs without the original
+section files.
 
 ```bash
-/Users/pcancela/miniforge3/envs/emilio_msa_features/bin/python run_structure_baseline.py \
-  --features-dir feature_outputs/rwc_p_20 \
-  --annotation-dir data/rwc-annotations-archive \
-  --out-dir structure_outputs/rwc_p_20_iter2 \
+python run_structure_baseline.py --config path/to/config.yaml \
+  --feature-dir feature_outputs/ \
+  --experiment-dir experiments/structure_baseline \
   --limit 20 \
-  --plot-experiment E11_anchor_mfcc_multiscale \
-  --ranked-track-figures 3
+  --resume
 ```
+
+CLI arguments (each overrides the matching YAML value):
+
+- `--config`: YAML config path. Segmentation settings live under the
+  `segmentation` key: `algorithms`, `ssm_features`, `graphditty_fusion.features`,
+  `feature_dir` and `experiment_dir`.
+- `--feature-dir`: folder with precomputed `*_features.npz` files. If none are
+  found, features are extracted from `audio_dir` (set in the YAML), and saved to
+  `out_dir` only if it is set.
+- `--audio-dir`: folder of audio files for on-the-fly feature extraction.
+- `--experiment-dir`: output folder for JAMS files and summaries
+  (default `experiments/structure_baseline`).
+- `--limit`: process only the first N tracks.
+- `--sr`, `--hop-length`, `--beat-tracking-method` (`librosa`, `beat_this`,
+  `madmom`): feature extraction overrides, used only when extracting from audio.
+- `--resume`: skip tracks whose JAMS outputs already exist for every
+  algorithm / SSM run, keeping their rows from the previous summary.
+
+Outputs in the experiment dir:
+
+- `<algorithm>__<ssm_run>/<track_id>.jams`: estimated segmentation, per-segment
+  CBM metrics, and the reference annotation.
+- `fusion_ssms/`: fused SSMs for GraphDitty multi-feature runs.
+- `segmentation_summary.json` and `.csv`: one row per track, algorithm and SSM run.
+tesis/msa/MSA-with-Interpretable-Features
