@@ -143,10 +143,9 @@ def extract_all(
     beat_boundaries, downbeat_boundaries = estimate_beats_and_downbeats(y, cfg)
     stm = np.zeros((0, 0), dtype=np.float32)
     stm_times = np.zeros(0, dtype=np.float32)
-    onset_env = np.zeros(0, dtype=np.float32)
     stm_effective_window_s = cfg.stm_window_s
     if need_stm:
-        stm, stm_times, onset_env, stm_effective_window_s = extract_stm(y, cfg, beat_boundaries)
+        stm, stm_times, _onset_env, stm_effective_window_s = extract_stm(y, cfg, beat_boundaries)
 
     beat_level_features: dict[str, np.ndarray] = {}
     if mfcc is not None and "mfcc" in requested:
@@ -199,24 +198,11 @@ def extract_all(
         "beat_boundaries": beat_boundaries,
         "beat_downbeat_boundaries": downbeat_boundaries if downbeat_boundaries is not None else np.array([]),
     }
-    if frame_times.size:
-        npz_payload["frame_times"] = frame_times
     if sections:
         npz_payload["sections"] = np.array(sections, dtype=object)
     if need_stm:
-        npz_payload["stm"] = stm
-        npz_payload["stm_times"] = stm_times
         npz_payload["stm_effective_window_s"] = stm_effective_window_s
-        npz_payload["onset_env"] = onset_env
-    raw_feature_map = {
-        "mfcc": mfcc,
-        "chroma": chroma,
-        "cens": cens,
-        **orthogonal_features,
-    }
-    for name, features in raw_feature_map.items():
-        if features is not None and name in requested:
-            npz_payload[name] = features
+    # Only beat-synchronous features are stored; frame-level arrays are discarded.
     for name, features in beat_level_features.items():
         npz_payload[f"beat_{name}"] = features
     for name, matrix in ssm_map.items():
@@ -253,12 +239,6 @@ def extract_all(
             "section_annotations_loaded": bool(sections),
         },
     }
-    if need_stm:
-        summary["shapes"]["stm"] = list(stm.shape)
-        summary["shapes"]["beat_stm"] = list(beat_level_features["stm"].shape)
-    for name, features in raw_feature_map.items():
-        if features is not None and name in requested:
-            summary["shapes"][name] = list(features.shape)
     for name, features in beat_level_features.items():
         summary["shapes"][f"beat_{name}"] = list(features.shape)
     for name, matrix in ssm_map.items():
