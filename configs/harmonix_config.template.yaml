@@ -58,11 +58,19 @@ segmentation:
   # - cbm / as_seg_cbm: as-seg CBM, default source for CBM
   # - msaf_cbm: MSAF vendored CBM implementation
   # - foote / msaf_foote: MSAF Foote novelty over the selected SSM
+  # - CBM is bar-wise: with `grid: bar` (default) the beat SSM is pooled into a
+  #   bar SSM using the downbeats, CBM runs there, and its boundaries are mapped
+  #   back to beats. `min_size`, `max_size` and the `modulo8` penalty are then
+  #   in BARS (paper defaults: 1, 32, modulo8). `grid: beat` runs CBM on the
+  #   beat SSM (sizes in beats); its output folder gets a `_beat` suffix.
+  # - Optional `name:` per entry overrides the output folder prefix (needed to
+  #   run the same algorithm twice with different params).
   algorithms:
     - id: cbm
       source: as_seg
       run: True
       params:
+        grid: bar
         min_size: 1
         max_size: 32
         penalty_weight: 1.0
@@ -78,15 +86,12 @@ segmentation:
 
     - id: scluster
       source: msaf
-      run: False
+      run: True
       params:
-        rep_feature: stm # global representation feature (must be one of the `computing_features` above!)
-        loc_feature: stm # local representation feature (must be one of the `computing_features` above!)
         scluster_k: 4
-        num_layers: 10
         evec_smooth: 9
-        rec_smooth: 9
-        rec_width: 9
+        rec_smooth: 1
+        rec_width: 1
 
 
 feature_config:
@@ -126,7 +131,6 @@ feature_config:
     - muq
     - musicfm
     - repcl
-    - matpac
     - mule
 
   # Preview rendering
@@ -135,12 +139,12 @@ feature_config:
   preview_features:
     - stm
     - cens
-    - chroma
     - mfcc
-    - sections
     - muq
     - musicfm
     - repcl
+    - mule
+    - sections
 
 
   # Output preview image formats
