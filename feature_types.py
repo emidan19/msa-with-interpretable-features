@@ -432,7 +432,6 @@ def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundar
             matpac = get_matpac(
                 checkpoint_path=os.fspath(cfg.matpac_checkpoint_path),
                 pull_time_dimension=False,
-                inference_type="fast",
             ).to(device).eval()
             emb, _layer_results = matpac(wav_16k)
             outputs["matpac"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
