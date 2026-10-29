@@ -108,6 +108,9 @@ feature_config:
 
   # SSL device
   ssl_device: "cuda"
+  # MusicFM / MuQ / MATPAC run on fixed-length chunks (seconds) so GPU memory does not grow with track length
+  ssl_chunk_s: 30.0
+  ssl_chunk_overlap_s: 5.0
 
   # Computing features
   # Available options:
@@ -133,20 +136,6 @@ feature_config:
   # Available options:
   #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections
   preview_features:
-    - stm
-    - cens
-    - chroma
-    - mfcc
-    - sections
-    - muq
-    - musicfm
-    - repcl
-    - muq
-    - mfcc
-    - chroma
-    - stm
-    - mule
-    - sections
 
 
   # Output preview image formats

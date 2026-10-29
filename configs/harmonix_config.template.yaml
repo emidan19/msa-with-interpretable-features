@@ -47,7 +47,7 @@ segmentation:
     - stm
 
   graphditty_fusion:
-    features: [[stm, repcl], [stm, musicfm], [stm, muq], [stm, mfcc], [stm, chroma]]
+    features: []
     k: 5
     niters: 20
     reg_diag: 1.0
@@ -112,6 +112,9 @@ feature_config:
 
   # SSL device
   ssl_device: "cuda"
+  # MusicFM / MuQ / MATPAC run on fixed-length chunks (seconds) so GPU memory does not grow with track length
+  ssl_chunk_s: 30.0
+  ssl_chunk_overlap_s: 5.0
 
   # Computing features
   # Available options:
@@ -138,14 +141,6 @@ feature_config:
   #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections
   # Leave empty to skip saving preview images.
   preview_features:
-    - stm
-    - cens
-    - mfcc
-    - muq
-    - musicfm
-    - repcl
-    - mule
-    - sections
 
 
   # Output preview image formats
