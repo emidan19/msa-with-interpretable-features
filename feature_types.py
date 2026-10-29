@@ -347,10 +347,11 @@ def extract_ssl_features(
     cfg: FeatureConfig,
     feature_names: set[str],
     beat_boundaries: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Returns (features, frame_times); frame_times only has the frame-level models (musicfm, muq, matpac)."""
     requested = feature_names & {"musicfm", "muq", "matpac", "repcl", "mule"}
     if not requested:
-        return {}
+        return {}, {}
 
     try:
         import os
@@ -371,6 +372,7 @@ def extract_ssl_features(
     waveform, sample_rate = torchaudio.load(audio_path)
     waveform = waveform.mean(dim=0, keepdim=True)
     outputs: dict[str, np.ndarray] = {}
+    output_times: dict[str, np.ndarray] = {}
     device = torch.device(cfg.ssl_device)
 
     def _resample_if_needed(target_sr: int) -> torch.Tensor:
@@ -379,7 +381,7 @@ def extract_ssl_features(
         return torchaudio.functional.resample(waveform, sample_rate, target_sr)
 
     try:
-        _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs)
+        _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs, output_times)
     finally:
         # Return cached blocks (models + activations of this track) to the driver so the
         # next track starts from a clean pool; costs a few ms, negligible vs. loading the models.
@@ -390,15 +392,48 @@ def extract_ssl_features(
         wav_16k = _resample_if_needed(16000).squeeze(0).cpu().numpy().astype(np.float32)
         outputs["mule"] = _extract_mule_embeddings(wav_16k, cfg)
 
-    return outputs
+    return outputs, output_times
 
 
-def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs) -> None:
+def _run_chunked(wav, sr: int, forward, chunk_s: float, overlap_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """Run `forward` on fixed-length chunks of `wav` (1, T) and stitch the frames back together.
+
+    `forward(chunk)` returns a (D, n) array whose n frames evenly cover the chunk. Every chunk
+    is exactly `chunk_s` long (the last one is shifted to end at the track end), so memory does
+    not depend on track length. Overlapping regions are split at their midpoint, which drops
+    the edge frames that see the least context. Returns (features (D, N), frame times (N,)).
+    """
+    n_samples = wav.shape[-1]
+    chunk = max(1, int(round(chunk_s * sr)))
+    if n_samples <= chunk:
+        emb = forward(wav)
+        times = np.linspace(0.0, n_samples / sr, num=emb.shape[1], endpoint=False)
+        return emb.astype(np.float32), times.astype(np.float32)
+
+    hop = max(1, chunk - int(round(overlap_s * sr)))
+    starts = list(range(0, n_samples - chunk, hop)) + [n_samples - chunk]
+    feature_parts, time_parts = [], []
+    for k, start in enumerate(starts):
+        end = start + chunk
+        keep_start = 0.0 if k == 0 else (start + starts[k - 1] + chunk) / 2.0 / sr
+        keep_end = n_samples / sr if k == len(starts) - 1 else (starts[k + 1] + end) / 2.0 / sr
+        emb = forward(wav[..., start:end])
+        times = start / sr + np.linspace(0.0, chunk / sr, num=emb.shape[1], endpoint=False)
+        keep = (times >= keep_start) & (times < keep_end)
+        feature_parts.append(emb[:, keep])
+        time_parts.append(times[keep])
+    return np.concatenate(feature_parts, axis=1).astype(np.float32), np.concatenate(time_parts).astype(np.float32)
+
+
+def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundaries, outputs, output_times) -> None:
     """Run the torch SSL models one at a time, dropping each model before loading the next."""
     import os
     import sys
 
     import torch
+
+    def _chunked(wav, sr, forward):
+        return _run_chunked(wav, sr, forward, cfg.ssl_chunk_s, cfg.ssl_chunk_overlap_s)
 
     with torch.no_grad():
         if "musicfm" in requested:
@@ -412,18 +447,22 @@ def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundar
                 model_path=os.fspath(cfg.musicfm_model_path),
             ).to(device)
             musicfm.eval()
-            emb = musicfm.get_latent(wav_24k, layer_ix=7)
-            outputs["musicfm"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
-            del musicfm, emb, wav_24k
+            outputs["musicfm"], output_times["musicfm"] = _chunked(
+                wav_24k, 24000, lambda x: musicfm.get_latent(x, layer_ix=7).squeeze(0).cpu().numpy().T
+            )
+            del musicfm, wav_24k
 
         if "muq" in requested:
             from muq import MuQ
 
             wav_24k = _resample_if_needed(24000).to(device)
             muq = MuQ.from_pretrained(cfg.muq_model_name).to(device).eval()
-            emb = muq(wav_24k, output_hidden_states=True)
-            outputs["muq"] = emb.last_hidden_state.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
-            del muq, emb, wav_24k
+            outputs["muq"], output_times["muq"] = _chunked(
+                wav_24k,
+                24000,
+                lambda x: muq(x, output_hidden_states=True).last_hidden_state.squeeze(0).cpu().numpy().T,
+            )
+            del muq, wav_24k
 
         if "matpac" in requested:
             from matpac.model import get_matpac
@@ -433,9 +472,10 @@ def _extract_torch_ssl(requested, cfg, device, _resample_if_needed, beat_boundar
                 checkpoint_path=os.fspath(cfg.matpac_checkpoint_path),
                 pull_time_dimension=False,
             ).to(device).eval()
-            emb, _layer_results = matpac(wav_16k)
-            outputs["matpac"] = emb.squeeze(0).detach().cpu().numpy().T.astype(np.float32)
-            del matpac, emb, _layer_results, wav_16k
+            outputs["matpac"], output_times["matpac"] = _chunked(
+                wav_16k, 16000, lambda x: matpac(x)[0].squeeze(0).cpu().numpy().T
+            )
+            del matpac, wav_16k
 
         if "repcl" in requested:
             outputs["repcl"] = _extract_repcl_embeddings(

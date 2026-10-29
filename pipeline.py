@@ -161,7 +161,9 @@ def extract_all(
             beat_level_features[name] = aggregate_by_intervals(features, frame_times, beat_boundaries)
 
     if need_ssl:
-        ssl_features = extract_ssl_features(str(audio_path), cfg, requested, beat_boundaries=beat_boundaries)
+        ssl_features, ssl_frame_times = extract_ssl_features(
+            str(audio_path), cfg, requested, beat_boundaries=beat_boundaries
+        )
         for name, features in ssl_features.items():
             if name == "repcl":
                 # Already one embedding per beat interval; no time-based aggregation needed.
@@ -171,8 +173,7 @@ def extract_all(
                 mule_times = np.arange(features.shape[1], dtype=np.float32) * cfg.mule_hop_frames * 0.01
                 beat_level_features[name] = aggregate_by_intervals(features, mule_times, beat_boundaries)
             else:
-                ssl_times = np.linspace(0.0, duration, num=features.shape[1], endpoint=False, dtype=np.float32)
-                beat_level_features[name] = aggregate_by_intervals(features, ssl_times, beat_boundaries)
+                beat_level_features[name] = aggregate_by_intervals(features, ssl_frame_times[name], beat_boundaries)
 
     ssm_map = {
         name: build_ssm(

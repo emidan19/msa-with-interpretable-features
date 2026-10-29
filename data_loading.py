@@ -125,7 +125,10 @@ class FeatureConfig:
     )
 
     ssl_device: str = "cpu"
-    
+    # MusicFM / MuQ / MATPAC run on fixed-length chunks so GPU memory does not grow with track length.
+    ssl_chunk_s: float = 30.0
+    ssl_chunk_overlap_s: float = 5.0
+
 FEATURE_NAME_ORDER = (
     "stm",
     "mfcc",
