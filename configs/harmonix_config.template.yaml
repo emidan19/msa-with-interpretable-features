@@ -136,6 +136,7 @@ feature_config:
   # Preview rendering
   # Available options:
   #   stm, mfcc, chroma, cens, arrangement, vocal, bass, tonnetz, density, sections
+  # Leave empty to skip saving preview images.
   preview_features:
     - stm
     - cens

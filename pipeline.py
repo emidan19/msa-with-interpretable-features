@@ -188,7 +188,8 @@ def extract_all(
     stem = audio_path.stem
     save = out_dir is not None
     npz_path = out_dir / f"{stem}_features.npz" if save else None
-    preview_paths = [out_dir / f"{stem}_preview.{fmt}" for fmt in cfg.preview_formats] if save else []
+    save_preview = save and bool(cfg.preview_features)
+    preview_paths = [out_dir / f"{stem}_preview.{fmt}" for fmt in cfg.preview_formats] if save_preview else []
     summary_path = out_dir / f"{stem}_summary.json" if save else None
 
     npz_payload: dict[str, object] = {
@@ -210,6 +211,7 @@ def extract_all(
     if save:
         np.savez_compressed(npz_path, **npz_payload)
 
+    if save_preview:
         save_previews(
             preview_paths,
             ssm_map,
@@ -228,8 +230,8 @@ def extract_all(
         "computed_features": sorted(beat_level_features.keys()) + (["sections"] if "sections" in ssm_map else []),
         "outputs": {
             "features_npz": str(npz_path) if save else "",
-            "preview_png": str(preview_paths[0]) if save and "png" in cfg.preview_formats else "",
-            "preview_svg": str(out_dir / f"{stem}_preview.svg") if save and "svg" in cfg.preview_formats else "",
+            "preview_png": str(out_dir / f"{stem}_preview.png") if save_preview and "png" in cfg.preview_formats else "",
+            "preview_svg": str(out_dir / f"{stem}_preview.svg") if save_preview and "svg" in cfg.preview_formats else "",
             "preview_files": [str(path) for path in preview_paths],
             "summary_json": str(summary_path) if save else "",
         },

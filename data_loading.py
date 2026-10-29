@@ -320,7 +320,10 @@ def config_from_mapping(data: dict[str, Any]) -> FeatureConfig:
     if "computing_features" in payload:
         payload["computing_features"] = normalize_computing_features(payload["computing_features"])
     if "preview_features" in payload:
-        payload["preview_features"] = normalize_preview_features(payload["preview_features"])
+        # An explicitly empty `preview_features:` disables preview rendering.
+        payload["preview_features"] = (
+            normalize_preview_features(payload["preview_features"]) if payload["preview_features"] else ()
+        )
     if "preview_formats" in payload:
         payload["preview_formats"] = normalize_preview_formats(payload["preview_formats"])
     if "ssm_similarity_type" in payload:

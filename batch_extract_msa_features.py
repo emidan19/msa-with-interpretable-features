@@ -41,6 +41,11 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stm-hop-s", type=float, default=None)
     parser.add_argument("--stm-min-beats", type=int, default=None)
     parser.add_argument("--preview-features", nargs="+", default=None)
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Recompute features even if outputs already exist in --out-dir.",
+    )
     return parser.parse_args(argv)
 
 
@@ -63,6 +68,64 @@ def shape_str(summary: dict, key: str) -> str:
     if not shape:
         return ""
     return "x".join(map(str, shape))
+
+
+def load_cached_summary(audio_path: Path, out_dir: Path) -> dict | None:
+    """Return the saved summary if this audio was already fully processed.
+
+    `extract_all` writes the summary JSON last, so its presence (together with
+    the npz) means a previous run finished this file.
+    """
+    summary_path = out_dir / f"{audio_path.stem}_summary.json"
+    npz_path = out_dir / f"{audio_path.stem}_features.npz"
+    if not (summary_path.exists() and npz_path.exists()):
+        return None
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def summary_row(audio_path: Path, summary: dict, status: str, elapsed: float) -> dict:
+    diagnostics = summary.get("diagnostics", {})
+    return {
+        "audio": audio_path.name,
+        "status": status,
+        "elapsed_s": round(elapsed, 3),
+        "duration_s": round(summary["duration_s"], 3),
+        "beat_intervals": diagnostics.get("beat_intervals", 0),
+        "beat_median_interval_s": round(diagnostics.get("beat_median_interval_s", 0.0), 6),
+        "beat_max_interval_s": round(diagnostics.get("beat_max_interval_s", 0.0), 6),
+        "stm_effective_window_s": round(diagnostics.get("stm_effective_window_s", 0.0), 6),
+        "stm_min_estimated_beats_per_window": diagnostics.get("stm_min_estimated_beats_per_window", 0),
+        "stm_median_estimated_beats_per_window": round(
+            diagnostics.get("stm_median_estimated_beats_per_window", 0.0), 6
+        ),
+        "arrangement_harmonic_ratio_mean": round(diagnostics.get("arrangement_harmonic_ratio_mean", 0.0), 6),
+        "arrangement_percussive_ratio_mean": round(diagnostics.get("arrangement_percussive_ratio_mean", 0.0), 6),
+        "vocal_proxy_mean": round(diagnostics.get("vocal_proxy_mean", 0.0), 6),
+        "bass_fraction_mean": round(diagnostics.get("bass_fraction_mean", 0.0), 6),
+        "density_onset_mean": round(diagnostics.get("density_onset_mean", 0.0), 6),
+        "tonnetz_hcdf_mean": round(diagnostics.get("tonnetz_hcdf_mean", 0.0), 6),
+        "stm_shape": shape_str(summary, "beat_stm"),
+        "mfcc_shape": shape_str(summary, "beat_mfcc"),
+        "chroma_shape": shape_str(summary, "beat_chroma"),
+        "cens_shape": shape_str(summary, "beat_cens"),
+        "arrangement_shape": shape_str(summary, "beat_arrangement"),
+        "vocal_shape": shape_str(summary, "beat_vocal"),
+        "bass_shape": shape_str(summary, "beat_bass"),
+        "tonnetz_shape": shape_str(summary, "beat_tonnetz"),
+        "density_shape": shape_str(summary, "beat_density"),
+        "musicfm_shape": shape_str(summary, "beat_musicfm"),
+        "muq_shape": shape_str(summary, "beat_muq"),
+        "matpac_shape": shape_str(summary, "beat_matpac"),
+        "repcl_shape": shape_str(summary, "beat_repcl"),
+        "mule_shape": shape_str(summary, "beat_mule"),
+        "features_npz": summary["outputs"]["features_npz"],
+        "preview_png": summary["outputs"]["preview_png"],
+        "preview_svg": summary["outputs"]["preview_svg"],
+        "summary_json": summary["outputs"]["summary_json"],
+    }
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -107,52 +170,18 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     rows: list[dict] = []
     for idx, audio_path in enumerate(audio_paths, start=1):
-        print(f"[{idx:02d}/{len(audio_paths):02d}] {audio_path.name}", flush=True)
+        prefix = f"[{idx:02d}/{len(audio_paths):02d}] {audio_path.name}"
+        cached = None if args.overwrite else load_cached_summary(audio_path, out_dir)
+        if cached is not None:
+            print(f"{prefix} (already computed, skipping)", flush=True)
+            rows.append(summary_row(audio_path, cached, "cached", 0.0))
+            write_index(out_dir, rows)
+            continue
+        print(prefix, flush=True)
         start = time.perf_counter()
         try:
             summary = extract_all(audio_path, out_dir, cfg)
-            elapsed = time.perf_counter() - start
-            diagnostics = summary.get("diagnostics", {})
-            rows.append(
-                {
-                    "audio": audio_path.name,
-                    "status": "ok",
-                    "elapsed_s": round(elapsed, 3),
-                    "duration_s": round(summary["duration_s"], 3),
-                    "beat_intervals": diagnostics.get("beat_intervals", 0),
-                    "beat_median_interval_s": round(diagnostics.get("beat_median_interval_s", 0.0), 6),
-                    "beat_max_interval_s": round(diagnostics.get("beat_max_interval_s", 0.0), 6),
-                    "stm_effective_window_s": round(diagnostics.get("stm_effective_window_s", 0.0), 6),
-                    "stm_min_estimated_beats_per_window": diagnostics.get("stm_min_estimated_beats_per_window", 0),
-                    "stm_median_estimated_beats_per_window": round(
-                        diagnostics.get("stm_median_estimated_beats_per_window", 0.0), 6
-                    ),
-                    "arrangement_harmonic_ratio_mean": round(diagnostics.get("arrangement_harmonic_ratio_mean", 0.0), 6),
-                    "arrangement_percussive_ratio_mean": round(diagnostics.get("arrangement_percussive_ratio_mean", 0.0), 6),
-                    "vocal_proxy_mean": round(diagnostics.get("vocal_proxy_mean", 0.0), 6),
-                    "bass_fraction_mean": round(diagnostics.get("bass_fraction_mean", 0.0), 6),
-                    "density_onset_mean": round(diagnostics.get("density_onset_mean", 0.0), 6),
-                    "tonnetz_hcdf_mean": round(diagnostics.get("tonnetz_hcdf_mean", 0.0), 6),
-                    "stm_shape": shape_str(summary, "beat_stm"),
-                    "mfcc_shape": shape_str(summary, "beat_mfcc"),
-                    "chroma_shape": shape_str(summary, "beat_chroma"),
-                    "cens_shape": shape_str(summary, "beat_cens"),
-                    "arrangement_shape": shape_str(summary, "beat_arrangement"),
-                    "vocal_shape": shape_str(summary, "beat_vocal"),
-                    "bass_shape": shape_str(summary, "beat_bass"),
-                    "tonnetz_shape": shape_str(summary, "beat_tonnetz"),
-                    "density_shape": shape_str(summary, "beat_density"),
-                    "musicfm_shape": shape_str(summary, "beat_musicfm"),
-                    "muq_shape": shape_str(summary, "beat_muq"),
-                    "matpac_shape": shape_str(summary, "beat_matpac"),
-                    "repcl_shape": shape_str(summary, "beat_repcl"),
-                    "mule_shape": shape_str(summary, "beat_mule"),
-                    "features_npz": summary["outputs"]["features_npz"],
-                    "preview_png": summary["outputs"]["preview_png"],
-                    "preview_svg": summary["outputs"]["preview_svg"],
-                    "summary_json": summary["outputs"]["summary_json"],
-                }
-            )
+            rows.append(summary_row(audio_path, summary, "ok", time.perf_counter() - start))
         except Exception as exc:
             elapsed = time.perf_counter() - start
             rows.append(
